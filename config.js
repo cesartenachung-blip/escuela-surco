@@ -7,6 +7,6 @@
    la seguridad de acceso se controla en Supabase con RLS (ver schema.sql).
    ============================================================================= */
 window.EDL_CONFIG = {
-  SUPABASE_URL: "https://hvafbjwdxulxcfsuohwt.supabase.co/rest/v1",
+  SUPABASE_URL: "https://hvafbjwdxulxcfsuohwt.supabase.co",
   SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2YWZiandkeHVseGNmc3VvaHd0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU2ODkwNzQsImV4cCI6MjEwMTI2NTA3NH0.7uCHv0Vgk32lF5F-wetxQUrW59MeyW4GFMFQzPdRwdo"
 };
