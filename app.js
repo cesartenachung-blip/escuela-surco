@@ -786,8 +786,12 @@ function renderAdminPersonas(host, rol){
   }).sort(function(a,b){ return (a.apellido+a.nombre).localeCompare(b.apellido+b.nombre); });
 
   var rows = lista.map(function(u){
-    var cursos = esAlumno ? cursosDeAlumno(u.dni) : cursosDeMonitor(u.dni);
-    var cursosTxt = cursos.map(function(c){ return escapeHtml(c.nombre); }).join(", ") || "—";
+    var cursosTodos = esAlumno ? cursosDeAlumno(u.dni) : cursosDeMonitor(u.dni);
+    // La columna "Cursos" solo debe reflejar el curso del trimestre (y curso) activos en el filtro.
+    var cursosMostrados = cursosTodos;
+    if(filtroCurso) cursosMostrados = cursosTodos.filter(function(c){ return c.id===filtroCurso; });
+    else if(filtroTrimestre) cursosMostrados = cursosTodos.filter(function(c){ return c.trimestreId===filtroTrimestre; });
+    var cursosTxt = cursosMostrados.map(function(c){ return escapeHtml(c.nombre); }).join(", ") || "—";
     var otroRol = esAlumno ? (cursosDeMonitor(u.dni).length>0) : (cursosDeAlumno(u.dni).length>0);
     var badgeDual = otroRol ? ' <span class="badge-muted">también '+(esAlumno?"monitor":"alumno")+'</span>' : '';
     return '<tr>' +
@@ -797,7 +801,7 @@ function renderAdminPersonas(host, rol){
       '<td style="font-size:.82rem">'+cursosTxt+'</td>' +
       '<td class="btn-row">' +
         '<button class="btn small secondary" data-action="edit-persona" data-dni="'+u.dni+'" data-rol="'+rol+'">Editar</button>' +
-        '<button class="btn small ghost" data-action="inscribir-persona" data-dni="'+u.dni+'">Inscribir</button>' +
+        (esAlumno ? '' : '<button class="btn small ghost" data-action="inscribir-persona" data-dni="'+u.dni+'">Inscribir</button>') +
         '<button class="btn small danger" data-action="del-persona" data-dni="'+u.dni+'">Eliminar</button>' +
       '</td>' +
     '</tr>';
@@ -872,14 +876,18 @@ function renderAdminIntercesion(host){
   if(!adminIntercesionState.trimestreId && trimestres.length) adminIntercesionState.trimestreId = trimestres[0].id;
 
   var cursosTrim = cursosDeTrimestre(adminIntercesionState.trimestreId);
-  if(!cursosTrim.some(function(c){ return c.id === adminIntercesionState.cursoId; })){
-    adminIntercesionState.cursoId = cursosTrim.length ? cursosTrim[0].id : null;
+  // null = aún no se eligió nada en este trimestre -> por defecto el primer curso.
+  // "" = la persona eligió explícitamente "Todos los cursos" -> se respeta.
+  if(adminIntercesionState.cursoId === null){
+    adminIntercesionState.cursoId = cursosTrim.length ? cursosTrim[0].id : "";
+  } else if(adminIntercesionState.cursoId !== "" && !cursosTrim.some(function(c){ return c.id === adminIntercesionState.cursoId; })){
+    adminIntercesionState.cursoId = cursosTrim.length ? cursosTrim[0].id : "";
   }
 
   var opcionesTrimestre = trimestres.map(function(t){
     return '<option value="'+t.id+'" '+(t.id===adminIntercesionState.trimestreId?"selected":"")+'>'+escapeHtml(t.nombre)+'</option>';
   }).join("");
-  var opcionesCurso = cursosTrim.map(function(c){
+  var opcionesCurso = '<option value="" '+(adminIntercesionState.cursoId===""?"selected":"")+'>Todos los cursos</option>' + cursosTrim.map(function(c){
     return '<option value="'+c.id+'" '+(c.id===adminIntercesionState.cursoId?"selected":"")+'>'+escapeHtml(c.nombre)+'</option>';
   }).join("");
 
@@ -919,45 +927,59 @@ function renderAdminIntercesionTable(){
   var host = document.getElementById("ic-content");
   if(!host) return;
   var cursoId = adminIntercesionState.cursoId;
-  if(!cursoId){
+  var cursosTrim = cursosDeTrimestre(adminIntercesionState.trimestreId);
+  if(!cursosTrim.length){
     host.innerHTML = '<div class="empty"><p>No hay cursos en el trimestre seleccionado.</p></div>';
     return;
   }
-  var alumnos = inscritosDeCurso(cursoId).sort(function(a,b){
-    return (a.apellido+a.nombre).localeCompare(b.apellido+b.nombre);
-  });
-  var q = normalize(adminIntercesionState.q);
-  if(q){
-    alumnos = alumnos.filter(function(a){ return normalize(a.nombre+" "+a.apellido).indexOf(q) > -1; });
-  }
+  var cursosTabla = cursoId ? cursosTrim.filter(function(c){ return c.id===cursoId; }) : cursosTrim;
   var semana = adminIntercesionState.semana;
+  var q = normalize(adminIntercesionState.q);
+
+  // Cada fila es un par alumno+curso (un alumno puede aparecer varias veces si
+  // está inscrito en más de un curso y se eligió "Todos los cursos").
+  var filas = [];
+  cursosTabla.forEach(function(curso){
+    inscritosDeCurso(curso.id).forEach(function(a){ filas.push({alumno:a, curso:curso}); });
+  });
+  if(q){
+    filas = filas.filter(function(f){ return normalize(f.alumno.nombre+" "+f.alumno.apellido).indexOf(q) > -1; });
+  }
+  filas.sort(function(x,y){
+    var byName = (x.alumno.apellido+x.alumno.nombre).localeCompare(y.alumno.apellido+y.alumno.nombre);
+    return byName !== 0 ? byName : x.curso.nombre.localeCompare(y.curso.nombre);
+  });
 
   var weekTabs = "";
   for(var w=1; w<=TOTAL_SEMANAS; w++){
-    var anyDone = inscritosDeCurso(cursoId).some(function(a){ var r=getAsistencia(a.dni,cursoId,w); return r && r.intercesion; });
+    var anyDone = filas.some(function(f){ var r=getAsistencia(f.alumno.dni,f.curso.id,w); return r && r.intercesion; });
     weekTabs += '<button class="week-tab '+(w===semana?"active":"")+' '+(anyDone?"done":"")+'" data-action="set-semana-ic" data-semana="'+w+'">Semana '+w+'</button>';
   }
 
-  var rows = alumnos.map(function(a){
-    var r = getAsistencia(a.dni, cursoId, semana) || {intercesion:false, fecha:null};
+  var mostrarColumnaCurso = !cursoId;
+  var rows = filas.map(function(f){
+    var r = getAsistencia(f.alumno.dni, f.curso.id, semana) || {intercesion:false, fecha:null};
     return '<tr>' +
-      '<td><strong>'+escapeHtml(a.apellido+" "+a.nombre)+'</strong><br><span style="color:var(--ink-soft);font-size:.78rem">DNI '+escapeHtml(a.dni)+'</span></td>' +
-      '<td class="chk-cell"><input type="checkbox" class="chk" data-action="toggle-interc" data-dni="'+a.dni+'" '+(r.intercesion?"checked":"")+'></td>' +
-      '<td><button class="btn small danger" data-action="reset-semana-interc" data-dni="'+a.dni+'">Restablecer</button></td>' +
+      '<td><strong>'+escapeHtml(f.alumno.apellido+" "+f.alumno.nombre)+'</strong><br><span style="color:var(--ink-soft);font-size:.78rem">DNI '+escapeHtml(f.alumno.dni)+'</span></td>' +
+      (mostrarColumnaCurso ? '<td style="font-size:.82rem">'+escapeHtml(f.curso.nombre)+'</td>' : '') +
+      '<td class="chk-cell"><input type="checkbox" class="chk" data-action="toggle-interc" data-dni="'+f.alumno.dni+'" data-curso="'+f.curso.id+'" '+(r.intercesion?"checked":"")+'></td>' +
+      '<td><button class="btn small danger" data-action="reset-semana-interc" data-dni="'+f.alumno.dni+'" data-curso="'+f.curso.id+'">Restablecer</button></td>' +
     '</tr>';
   }).join("");
 
-  var totalInscritos = inscritosDeCurso(cursoId).length;
-  var totalInterc = inscritosDeCurso(cursoId).filter(function(a){ var r=getAsistencia(a.dni,cursoId,semana); return r && r.intercesion; }).length;
+  var totalInscritos = filas.length;
+  var totalInterc = filas.filter(function(f){ var r=getAsistencia(f.alumno.dni,f.curso.id,semana); return r && r.intercesion; }).length;
+  var avisoEscaneo = !cursoId ? '<p class="hint-text" style="color:var(--warn);margin-top:0">Para escanear código QR, seleccione un curso específico (no "Todos los cursos").</p>' : '';
 
   host.innerHTML =
+    avisoEscaneo +
     '<div class="stat-row">' +
-      '<div class="stat"><div class="num">'+totalInscritos+'</div><div class="lbl">Inscritos</div></div>' +
+      '<div class="stat"><div class="num">'+totalInscritos+'</div><div class="lbl">'+(mostrarColumnaCurso?"Inscripciones":"Inscritos")+'</div></div>' +
       '<div class="stat"><div class="num">'+totalInterc+'</div><div class="lbl">Con intercesión semana '+semana+'</div></div>' +
     '</div>' +
     '<div class="week-tabs">'+weekTabs+'</div>' +
-    (alumnos.length ?
-      '<div class="table-wrap"><table><thead><tr><th>Alumno</th><th>Intercesión</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'
+    (filas.length ?
+      '<div class="table-wrap"><table><thead><tr><th>Alumno</th>'+(mostrarColumnaCurso?'<th>Curso</th>':'')+'<th>Intercesión</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'
       : '<div class="empty"><p>No se encontraron alumnos inscritos'+(q?" con ese criterio":"")+'.</p></div>');
 }
 
@@ -1143,13 +1165,15 @@ document.addEventListener("click", async function(e){
       case "set-semana-ic": adminIntercesionState.semana = parseInt(el.getAttribute("data-semana"),10); renderAdminIntercesionTable(); break;
       case "toggle-interc": {
         var icDni = el.getAttribute("data-dni");
-        upsertAsistenciaOptimista(icDni, adminIntercesionState.cursoId, adminIntercesionState.semana, {intercesion: el.checked});
+        var icCurso = el.getAttribute("data-curso") || adminIntercesionState.cursoId;
+        upsertAsistenciaOptimista(icDni, icCurso, adminIntercesionState.semana, {intercesion: el.checked});
         renderAdminIntercesionTable();
         break;
       }
       case "reset-semana-interc": {
         var icDni2 = el.getAttribute("data-dni");
-        upsertAsistenciaOptimista(icDni2, adminIntercesionState.cursoId, adminIntercesionState.semana, {intercesion:false});
+        var icCurso2 = el.getAttribute("data-curso") || adminIntercesionState.cursoId;
+        upsertAsistenciaOptimista(icDni2, icCurso2, adminIntercesionState.semana, {intercesion:false});
         toast("Intercesión restablecida.");
         renderAdminIntercesionTable();
         break;
