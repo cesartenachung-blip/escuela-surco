@@ -602,7 +602,16 @@ function renderAlumnoContent(user){
 // ---------------------------------------------------------------------
 // VISTA ADMINISTRADOR
 // ---------------------------------------------------------------------
-var adminViewState = { tab:"cursos" };
+var adminViewState = {
+  tab:"cursos",
+  filtroCursosTrimestre:"",
+  filtroAlumnosTrimestre:"",
+  filtroAlumnosCurso:"",
+  filtroMonitoresTrimestre:"",
+  masivoInscTrimestre:""
+};
+
+function countLabel(n, singular, plural){ return n + " " + (n===1?singular:plural); }
 
 function renderAdminView(user){
   var tabs = [
@@ -631,7 +640,12 @@ function renderAdminTab(){
 }
 
 function renderAdminCursos(host){
-  var rows = db.cursos.map(function(c){
+  var filtroTrimestre = adminViewState.filtroCursosTrimestre;
+  var cursosFiltrados = db.cursos.filter(function(c){
+    return !filtroTrimestre || c.trimestreId === filtroTrimestre;
+  });
+
+  var rows = cursosFiltrados.map(function(c){
     var t = findTrimestre(c.trimestreId);
     var m = findUsuario(c.monitorDni);
     var n = inscritosDeCurso(c.id).length;
@@ -646,24 +660,53 @@ function renderAdminCursos(host){
       '</td>' +
     '</tr>';
   }).join("");
+
+  var opcionesTrimestre = '<option value="">Todos los trimestres</option>' + db.trimestres.map(function(t){
+    return '<option value="'+t.id+'" '+(t.id===filtroTrimestre?"selected":"")+'>'+escapeHtml(t.nombre)+'</option>';
+  }).join("");
+
   host.innerHTML =
     '<div class="card">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">' +
-        '<h2 style="margin:0">Cursos</h2>' +
+        '<h2 style="margin:0">Cursos <span class="badge-muted">'+countLabel(cursosFiltrados.length,"curso","cursos")+'</span></h2>' +
+      '</div>' +
+      '<div class="toolbar" style="margin-top:14px;margin-bottom:0;justify-content:space-between">' +
+        '<div class="field"><label>Trimestre</label><select id="filtro-cursos-trimestre">'+opcionesTrimestre+'</select></div>' +
         '<button class="btn" data-action="new-curso">+ Nuevo curso</button>' +
       '</div>' +
-      (db.cursos.length ?
+      (cursosFiltrados.length ?
         '<div class="table-wrap" style="margin-top:16px"><table><thead><tr><th>Curso</th><th>Trimestre</th><th>Monitor</th><th>Inscritos</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'
-        : '<div class="empty"><p>Aún no hay cursos creados.</p></div>') +
+        : '<div class="empty"><p>No hay cursos para este filtro.</p></div>') +
     '</div>';
+
+  $("#filtro-cursos-trimestre").addEventListener("change", function(e){
+    adminViewState.filtroCursosTrimestre = e.target.value;
+    renderAdminTab();
+  });
 }
 
 function renderAdminPersonas(host, rol){
   var titulo = rol==="estudiante" ? "Alumnos" : "Monitores";
-  var lista = db.usuarios.filter(function(u){ return u.rol===rol; })
-    .sort(function(a,b){ return (a.apellido+a.nombre).localeCompare(b.apellido+b.nombre); });
+  var esAlumno = rol==="estudiante";
+  var filtroTrimestre = esAlumno ? adminViewState.filtroAlumnosTrimestre : adminViewState.filtroMonitoresTrimestre;
+  var filtroCurso = esAlumno ? adminViewState.filtroAlumnosCurso : "";
+
+  var cursosParaFiltro = filtroTrimestre ? cursosDeTrimestre(filtroTrimestre) : db.cursos;
+  // Si el curso elegido ya no pertenece al trimestre filtrado, se descarta.
+  if(esAlumno && filtroCurso && !cursosParaFiltro.some(function(c){ return c.id===filtroCurso; })){
+    filtroCurso = "";
+    adminViewState.filtroAlumnosCurso = "";
+  }
+
+  var lista = db.usuarios.filter(function(u){ return u.rol===rol; }).filter(function(u){
+    var cursosPersona = esAlumno ? cursosDeAlumno(u.dni) : cursosDeMonitor(u.dni);
+    if(filtroCurso) return cursosPersona.some(function(c){ return c.id===filtroCurso; });
+    if(filtroTrimestre) return cursosPersona.some(function(c){ return c.trimestreId===filtroTrimestre; });
+    return true;
+  }).sort(function(a,b){ return (a.apellido+a.nombre).localeCompare(b.apellido+b.nombre); });
+
   var rows = lista.map(function(u){
-    var cursos = rol==="estudiante" ? cursosDeAlumno(u.dni) : cursosDeMonitor(u.dni);
+    var cursos = esAlumno ? cursosDeAlumno(u.dni) : cursosDeMonitor(u.dni);
     var cursosTxt = cursos.map(function(c){ return escapeHtml(c.nombre); }).join(", ") || "—";
     return '<tr>' +
       '<td><strong>'+escapeHtml(u.apellido+" "+u.nombre)+'</strong></td>' +
@@ -672,21 +715,52 @@ function renderAdminPersonas(host, rol){
       '<td style="font-size:.82rem">'+cursosTxt+'</td>' +
       '<td class="btn-row">' +
         '<button class="btn small secondary" data-action="edit-persona" data-dni="'+u.dni+'" data-rol="'+rol+'">Editar</button>' +
-        (rol==="estudiante" ? '<button class="btn small ghost" data-action="inscribir-persona" data-dni="'+u.dni+'">Inscribir</button>' : '') +
+        (esAlumno ? '<button class="btn small ghost" data-action="inscribir-persona" data-dni="'+u.dni+'">Inscribir</button>' : '') +
         '<button class="btn small danger" data-action="del-persona" data-dni="'+u.dni+'">Eliminar</button>' +
       '</td>' +
     '</tr>';
   }).join("");
+
+  var opcionesTrimestre = '<option value="">Todos los trimestres</option>' + db.trimestres.map(function(t){
+    return '<option value="'+t.id+'" '+(t.id===filtroTrimestre?"selected":"")+'>'+escapeHtml(t.nombre)+'</option>';
+  }).join("");
+  var opcionesCurso = '<option value="">Todos los cursos</option>' + cursosParaFiltro.map(function(c){
+    return '<option value="'+c.id+'" '+(c.id===filtroCurso?"selected":"")+'>'+escapeHtml(c.nombre)+'</option>';
+  }).join("");
+
+  var filtrosHtml = '<div style="display:flex;gap:14px;flex-wrap:wrap">' +
+    '<div class="field"><label>Trimestre</label><select id="filtro-personas-trimestre">'+opcionesTrimestre+'</select></div>' +
+    (esAlumno ? '<div class="field"><label>Curso</label><select id="filtro-personas-curso">'+opcionesCurso+'</select></div>' : '') +
+  '</div>';
+
   host.innerHTML =
     '<div class="card">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">' +
-        '<h2 style="margin:0">'+titulo+'</h2>' +
-        '<button class="btn" data-action="new-persona" data-rol="'+rol+'">+ Nuevo '+(rol==="estudiante"?"alumno":"monitor")+'</button>' +
+        '<h2 style="margin:0">'+titulo+' <span class="badge-muted">'+countLabel(lista.length, esAlumno?"alumno":"monitor", esAlumno?"alumnos":"monitores")+'</span></h2>' +
+      '</div>' +
+      '<div class="toolbar" style="margin-top:14px;margin-bottom:0;justify-content:space-between">' +
+        filtrosHtml +
+        '<button class="btn" data-action="new-persona" data-rol="'+rol+'">+ Nuevo '+(esAlumno?"alumno":"monitor")+'</button>' +
       '</div>' +
       (lista.length ?
         '<div class="table-wrap" style="margin-top:16px"><table><thead><tr><th>Nombre</th><th>DNI (usuario)</th><th>Celular (clave)</th><th>Cursos</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'
-        : '<div class="empty"><p>Aún no hay '+(rol==="estudiante"?"alumnos":"monitores")+' registrados.</p></div>') +
+        : '<div class="empty"><p>No hay '+(esAlumno?"alumnos":"monitores")+' para este filtro.</p></div>') +
     '</div>';
+
+  $("#filtro-personas-trimestre").addEventListener("change", function(e){
+    if(esAlumno){
+      adminViewState.filtroAlumnosTrimestre = e.target.value;
+      adminViewState.filtroAlumnosCurso = "";
+    } else {
+      adminViewState.filtroMonitoresTrimestre = e.target.value;
+    }
+    renderAdminTab();
+  });
+  var selCurso = document.getElementById("filtro-personas-curso");
+  if(selCurso) selCurso.addEventListener("change", function(e){
+    adminViewState.filtroAlumnosCurso = e.target.value;
+    renderAdminTab();
+  });
 }
 
 function renderAdminTrimestres(host){
@@ -712,15 +786,21 @@ function renderAdminTrimestres(host){
 }
 
 function renderAdminMasivo(host){
-  var opcionesCursos = db.cursos.map(function(c){
-    var t = findTrimestre(c.trimestreId);
-    return '<option value="'+c.id+'">'+escapeHtml(c.nombre + " — " + (t?t.nombre:""))+'</option>';
-  }).join("");
   var opcionesTrimestres = db.trimestres.map(function(t){
     return '<option value="'+t.id+'">'+escapeHtml(t.nombre)+'</option>';
   }).join("");
   var opcionesMonitores = '<option value="">Sin asignar</option>' + db.usuarios.filter(function(u){return u.rol==="monitor";}).map(function(m){
     return '<option value="'+m.dni+'">'+escapeHtml(m.nombre+" "+m.apellido)+'</option>';
+  }).join("");
+
+  var filtroInscTrimestre = adminViewState.masivoInscTrimestre;
+  var cursosInsc = filtroInscTrimestre ? cursosDeTrimestre(filtroInscTrimestre) : db.cursos;
+  var opcionesTrimestresInsc = '<option value="">Todos los trimestres</option>' + db.trimestres.map(function(t){
+    return '<option value="'+t.id+'" '+(t.id===filtroInscTrimestre?"selected":"")+'>'+escapeHtml(t.nombre)+'</option>';
+  }).join("");
+  var opcionesCursosInsc = cursosInsc.map(function(c){
+    var t = findTrimestre(c.trimestreId);
+    return '<option value="'+c.id+'">'+escapeHtml(c.nombre + " — " + (t?t.nombre:""))+'</option>';
   }).join("");
 
   host.innerHTML =
@@ -737,11 +817,22 @@ function renderAdminMasivo(host){
     '<div class="card">' +
       '<h2>Inscripción masiva de alumnos</h2>' +
       '<p class="hint-text">Formato por línea: <code>DNI,Nombre,Apellido,Celular</code>. Si el DNI ya existe, solo se actualizan sus datos y se inscribe al curso. La clave de ingreso será el número de celular.</p>' +
-      (db.cursos.length ? '<div class="field" style="margin-bottom:12px"><label>Curso destino</label><select id="sel-masivo-curso">'+opcionesCursos+'</select></div>'
+      (db.cursos.length ?
+        '<div class="toolbar" style="margin-bottom:14px">' +
+          '<div class="field"><label>Trimestre</label><select id="filtro-masivo-insc-trimestre">'+opcionesTrimestresInsc+'</select></div>' +
+          '<div class="field"><label>Curso destino</label><select id="sel-masivo-curso">'+opcionesCursosInsc+'</select></div>' +
+        '</div>'
         : '<p class="hint-text" style="color:var(--warn)">Debe crear al menos un curso antes de inscribir alumnos.</p>') +
       '<textarea class="bulk" id="txt-masivo-alumnos" placeholder="30000005,Carla,Rios,977000005\n30000006,Jose,Diaz,977000006"></textarea>' +
-      '<div style="margin-top:12px"><button class="btn" data-action="masivo-alumnos" '+(db.cursos.length?"":"disabled")+'>Inscribir alumnos</button></div>' +
+      '<div style="margin-top:12px"><button class="btn" data-action="masivo-alumnos" '+(db.cursos.length && cursosInsc.length ?"":"disabled")+'>Inscribir alumnos</button></div>' +
+      (db.cursos.length && !cursosInsc.length ? '<p class="hint-text" style="color:var(--warn)">No hay cursos en el trimestre elegido.</p>' : '') +
     '</div>';
+
+  var selFiltroTrim = document.getElementById("filtro-masivo-insc-trimestre");
+  if(selFiltroTrim) selFiltroTrim.addEventListener("change", function(e){
+    adminViewState.masivoInscTrimestre = e.target.value;
+    renderAdminTab();
+  });
 }
 
 // ---- Modales de administración ----
