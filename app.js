@@ -160,16 +160,31 @@ function resetAsistenciaOptimista(dni, cursoId, semana){
 // ---------------------------------------------------------------------
 // Sesión / autenticación (local a este dispositivo)
 // ---------------------------------------------------------------------
-var session = { dni: null };
+var session = { dni: null, vista: null };
 function loadSession(){
   try{
     var raw = localStorage.getItem(SESSION_KEY);
     if(raw) session = JSON.parse(raw);
-  }catch(e){ session = {dni:null}; }
+  }catch(e){ session = {dni:null, vista:null}; }
 }
 function saveSession(){ localStorage.setItem(SESSION_KEY, JSON.stringify(session)); }
-function clearSession(){ session = {dni:null}; localStorage.removeItem(SESSION_KEY); }
+function clearSession(){ session = {dni:null, vista:null}; localStorage.removeItem(SESSION_KEY); }
 function currentUser(){ return session.dni ? findUsuario(session.dni) : null; }
+
+// Una misma persona puede ser monitor de un curso y alumno de otro distinto
+// (o viceversa) dentro del mismo trimestre. Esta función calcula qué vistas
+// le corresponden según sus datos reales (no solo su rol de creación).
+function vistasDisponibles(user){
+  if(!user) return [];
+  if(user.rol === "admin") return ["admin"];
+  var esMonitor = user.rol === "monitor" || db.cursos.some(function(c){ return c.monitorDni === user.dni; });
+  var esAlumno = user.rol === "estudiante" || db.inscripciones.some(function(i){ return i.dni === user.dni; });
+  var vistas = [];
+  if(esMonitor) vistas.push("monitor");
+  if(esAlumno) vistas.push("estudiante");
+  if(!vistas.length) vistas.push(user.rol === "monitor" ? "monitor" : "estudiante");
+  return vistas;
+}
 
 function attemptLogin(dni, celular){
   dni = String(dni||"").trim();
@@ -177,10 +192,46 @@ function attemptLogin(dni, celular){
   var user = db.usuarios.find(function(u){ return u.dni === dni; });
   if(!user || user.celular !== celular || user.activo === false) return false;
   session.dni = user.dni;
+  session.vista = null;
   saveSession();
   return true;
 }
 function logout(){ clearSession(); stopScanner(); route(); }
+
+// Tras iniciar sesión (o al recargar la página), decide si hay que mostrar
+// la app directamente o pedirle a la persona que elija con qué rol entrar.
+function resolveVistaAndRoute(){
+  var user = currentUser();
+  if(!user){ route(); return; }
+  var vistas = vistasDisponibles(user);
+  if(vistas.length <= 1){
+    session.vista = vistas[0] || null;
+    saveSession();
+    route();
+    return;
+  }
+  if(session.vista && vistas.indexOf(session.vista) > -1){
+    route();
+  } else {
+    showVistaSelector(user, vistas);
+  }
+}
+
+function showVistaSelector(user, vistas){
+  var opciones = vistas.map(function(v){
+    return '<button type="button" class="btn-primary vista-option-btn" data-action="choose-vista" data-vista="'+v+'">Ingresar como '+ROLE_LABEL[v].toUpperCase()+'</button>';
+  }).join("");
+
+  var screen = document.getElementById("screen-vista-selector");
+  screen.innerHTML =
+    '<div class="login-wrap">' +
+      '<div class="login-badge">'+logoSvg()+'</div>' +
+      '<h1 class="login-title">Comunidad Cristiana Agua Viva</h1>' +
+      '<p class="login-sub">Hola, '+escapeHtml(user.nombre)+'. Este trimestre participas en más de un rol.<br>¿Cómo deseas ingresar?</p>' +
+      '<div class="login-card"><div class="vista-options">'+opciones+'</div></div>' +
+    '</div>';
+  showScreen("screen-vista-selector");
+}
 
 // ---------------------------------------------------------------------
 // Código QR - generación
@@ -366,19 +417,27 @@ function iconQr(){
 function iconLogout(){
   return '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M9 4H6.5A1.5 1.5 0 0 0 5 5.5v13A1.5 1.5 0 0 0 6.5 20H9M16 16l4-4-4-4M20 12H9" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 }
+function iconSwitch(){
+  return '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M7 7h11l-3-3M17 17H6l3 3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+}
 
 var ROLE_LABEL = {admin:"Administrador", monitor:"Monitor", estudiante:"Alumno"};
 
-function renderHeader(user){
+function renderHeader(user, vista, vistas){
+  vista = vista || user.rol;
+  vistas = vistas || [vista];
   var actionBtn = "";
-  if(user.rol === "monitor"){
+  if(vista === "monitor"){
     actionBtn = '<button class="pill-btn" data-action="open-scan-picker">' + iconCamera() + ' Escanear QR Asistencia</button>';
-  } else if(user.rol === "estudiante"){
+  } else if(vista === "estudiante"){
     actionBtn = '<button class="pill-btn" data-action="show-my-qr">' + iconQr() + ' Ver Código QR Asistencia</button>';
   }
-  var welcome = user.rol === "estudiante"
+  var welcome = vista === "estudiante"
     ? '<div class="welcome">Bienvenido, ' + escapeHtml(user.nombre) + '</div>'
     : '<div class="welcome">' + escapeHtml(user.nombre + " " + user.apellido) + '</div>';
+  var switchBtn = vistas.length > 1
+    ? '<button class="pill-btn ghost" data-action="switch-vista">' + iconSwitch() + ' Cambiar vista</button>'
+    : '';
   return (
     '<header class="app-header">' +
       '<div class="htitle">' +
@@ -390,8 +449,9 @@ function renderHeader(user){
         '</div>' +
       '</div>' +
       '<div class="header-actions">' +
-        '<span class="role-badge">' + ROLE_LABEL[user.rol] + '</span>' +
+        '<span class="role-badge">' + ROLE_LABEL[vista] + '</span>' +
         actionBtn +
+        switchBtn +
         '<button class="pill-btn ghost" data-action="logout">' + iconLogout() + ' Salir</button>' +
       '</div>' +
     '</header>'
@@ -710,7 +770,15 @@ function renderAdminPersonas(host, rol){
     adminViewState.filtroAlumnosCurso = "";
   }
 
-  var lista = db.usuarios.filter(function(u){ return u.rol===rol; }).filter(function(u){
+  // Una persona aparece en esta lista si su rol base coincide, O si además de su rol
+  // base tiene inscripciones (como alumno) o cursos asignados (como monitor) — esto
+  // cubre el caso de alguien que es monitor de un curso y alumno de otro distinto.
+  var lista = db.usuarios.filter(function(u){
+    if(u.rol === "admin") return false;
+    var tieneRolBase = u.rol === rol;
+    var tieneCapacidad = esAlumno ? cursosDeAlumno(u.dni).length > 0 : cursosDeMonitor(u.dni).length > 0;
+    return tieneRolBase || tieneCapacidad;
+  }).filter(function(u){
     var cursosPersona = esAlumno ? cursosDeAlumno(u.dni) : cursosDeMonitor(u.dni);
     if(filtroCurso) return cursosPersona.some(function(c){ return c.id===filtroCurso; });
     if(filtroTrimestre) return cursosPersona.some(function(c){ return c.trimestreId===filtroTrimestre; });
@@ -720,14 +788,16 @@ function renderAdminPersonas(host, rol){
   var rows = lista.map(function(u){
     var cursos = esAlumno ? cursosDeAlumno(u.dni) : cursosDeMonitor(u.dni);
     var cursosTxt = cursos.map(function(c){ return escapeHtml(c.nombre); }).join(", ") || "—";
+    var otroRol = esAlumno ? (cursosDeMonitor(u.dni).length>0) : (cursosDeAlumno(u.dni).length>0);
+    var badgeDual = otroRol ? ' <span class="badge-muted">también '+(esAlumno?"monitor":"alumno")+'</span>' : '';
     return '<tr>' +
-      '<td><strong>'+escapeHtml(u.apellido+" "+u.nombre)+'</strong></td>' +
+      '<td><strong>'+escapeHtml(u.apellido+" "+u.nombre)+'</strong>'+badgeDual+'</td>' +
       '<td>'+escapeHtml(u.dni)+'</td>' +
       '<td>'+escapeHtml(u.celular)+'</td>' +
       '<td style="font-size:.82rem">'+cursosTxt+'</td>' +
       '<td class="btn-row">' +
         '<button class="btn small secondary" data-action="edit-persona" data-dni="'+u.dni+'" data-rol="'+rol+'">Editar</button>' +
-        (esAlumno ? '<button class="btn small ghost" data-action="inscribir-persona" data-dni="'+u.dni+'">Inscribir</button>' : '') +
+        '<button class="btn small ghost" data-action="inscribir-persona" data-dni="'+u.dni+'">Inscribir</button>' +
         '<button class="btn small danger" data-action="del-persona" data-dni="'+u.dni+'">Eliminar</button>' +
       '</td>' +
     '</tr>';
@@ -895,7 +965,7 @@ function renderAdminMasivo(host){
   var opcionesTrimestres = db.trimestres.map(function(t){
     return '<option value="'+t.id+'">'+escapeHtml(t.nombre)+'</option>';
   }).join("");
-  var opcionesMonitores = '<option value="">Sin asignar</option>' + db.usuarios.filter(function(u){return u.rol==="monitor";}).map(function(m){
+  var opcionesMonitores = '<option value="">Sin asignar</option>' + db.usuarios.filter(function(u){return u.rol!=="admin";}).sort(function(a,b){ return (a.apellido+a.nombre).localeCompare(b.apellido+b.nombre); }).map(function(m){
     return '<option value="'+m.dni+'">'+escapeHtml(m.nombre+" "+m.apellido)+'</option>';
   }).join("");
 
@@ -947,7 +1017,7 @@ function openCursoModal(cursoId){
   var opcionesTrimestres = db.trimestres.map(function(t){
     return '<option value="'+t.id+'" '+(curso&&curso.trimestreId===t.id?"selected":"")+'>'+escapeHtml(t.nombre)+'</option>';
   }).join("");
-  var opcionesMonitores = '<option value="">Sin asignar</option>' + db.usuarios.filter(function(u){return u.rol==="monitor";}).map(function(m){
+  var opcionesMonitores = '<option value="">Sin asignar</option>' + db.usuarios.filter(function(u){return u.rol!=="admin";}).sort(function(a,b){ return (a.apellido+a.nombre).localeCompare(b.apellido+b.nombre); }).map(function(m){
     return '<option value="'+m.dni+'" '+(curso&&curso.monitorDni===m.dni?"selected":"")+'>'+escapeHtml(m.nombre+" "+m.apellido)+'</option>';
   }).join("");
   var html = modalShell(
@@ -1004,8 +1074,10 @@ function route(){
   var user = currentUser();
   var loadingScreen = document.getElementById("screen-loading");
   var connErrorScreen = document.getElementById("screen-conn-error");
+  var vistaScreen = document.getElementById("screen-vista-selector");
   if(loadingScreen) loadingScreen.classList.add("hidden");
   if(connErrorScreen) connErrorScreen.classList.add("hidden");
+  if(vistaScreen) vistaScreen.classList.add("hidden");
   var loginScreen = document.getElementById("screen-login");
   var appScreen = document.getElementById("screen-app");
   if(!user){
@@ -1014,11 +1086,13 @@ function route(){
     document.getElementById("login-error").classList.remove("show");
     return;
   }
+  var vistas = vistasDisponibles(user);
+  var vista = (session.vista && vistas.indexOf(session.vista) > -1) ? session.vista : vistas[0];
   loginScreen.classList.add("hidden");
   appScreen.classList.remove("hidden");
-  document.getElementById("app-header").innerHTML = renderHeader(user);
-  if(user.rol === "admin") renderAdminView(user);
-  else if(user.rol === "monitor") renderMonitorView(user);
+  document.getElementById("app-header").innerHTML = renderHeader(user, vista, vistas);
+  if(vista === "admin") renderAdminView(user);
+  else if(vista === "monitor") renderMonitorView(user);
   else renderAlumnoView(user);
 }
 
@@ -1038,6 +1112,19 @@ document.addEventListener("click", async function(e){
     switch(action){
       case "close-modal": closeModal(); break;
       case "logout": logout(); break;
+      case "choose-vista": {
+        session.vista = el.getAttribute("data-vista");
+        saveSession();
+        route();
+        break;
+      }
+      case "switch-vista": {
+        var uForVista = currentUser();
+        session.vista = null;
+        saveSession();
+        showVistaSelector(uForVista, vistasDisponibles(uForVista));
+        break;
+      }
 
       case "open-scan-picker": {
         var cursos = cursosDeMonitor(user.dni).filter(function(c){ return c.trimestreId === monitorViewState.trimestreId; });
@@ -1235,7 +1322,7 @@ function setupLogin(){
     if(ok){
       err.classList.remove("show");
       form.reset();
-      route();
+      resolveVistaAndRoute();
     } else {
       err.textContent = "Usuario o clave incorrectos.";
       err.classList.add("show");
@@ -1268,7 +1355,7 @@ function subscribeRealtime(){
 // Pantallas de carga / error de conexión
 // ---------------------------------------------------------------------
 function showScreen(id){
-  ["screen-loading","screen-conn-error","screen-login","screen-app"].forEach(function(s){
+  ["screen-loading","screen-conn-error","screen-login","screen-vista-selector","screen-app"].forEach(function(s){
     var el = document.getElementById(s);
     if(el) el.classList.add("hidden");
   });
@@ -1311,7 +1398,7 @@ async function init(){
   loadSession();
   setupLogin();
   subscribeRealtime();
-  route();
+  resolveVistaAndRoute();
 }
 
 if(document.readyState === "loading"){

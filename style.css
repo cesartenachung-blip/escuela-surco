@@ -30,7 +30,7 @@ input,select,textarea{font-family:inherit}
 .hidden{display:none !important}
 
 /* ---------- LOGIN ---------- */
-#screen-login{
+#screen-login, #screen-vista-selector{
   min-height:100vh;
   display:flex;
   align-items:center;
@@ -38,6 +38,8 @@ input,select,textarea{font-family:inherit}
   padding:32px 16px;
   background:radial-gradient(circle at 30% 0%, #7444d6 0%, var(--purple-1) 45%, var(--purple-2) 100%);
 }
+.vista-options{display:flex;flex-direction:column;gap:12px}
+.vista-option-btn{margin-top:0}
 .login-wrap{width:100%;max-width:420px;text-align:center}
 .login-badge{
   width:96px;height:96px;border-radius:24px;margin:0 auto 22px;
