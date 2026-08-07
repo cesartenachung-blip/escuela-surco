@@ -68,8 +68,8 @@ function $(sel, ctx){ return (ctx||document).querySelector(sel); }
 var db = { usuarios:[], trimestres:[], cursos:[], inscripciones:[], asistencia:[] };
 
 // Mapeo snake_case (Postgres) <-> camelCase (usado por las vistas)
-function rowToCurso(r){ return {id:r.id, nombre:r.nombre, trimestreId:r.trimestre_id, monitorDni:r.monitor_dni}; }
-function cursoToRow(c){ return {nombre:c.nombre, trimestre_id:c.trimestreId, monitor_dni:c.monitorDni||null}; }
+function rowToCurso(r){ return {id:r.id, nombre:r.nombre, trimestreId:r.trimestre_id, monitorDni:r.monitor_dni, bloqueado: !!r.bloqueado}; }
+function cursoToRow(c){ return {nombre:c.nombre, trimestre_id:c.trimestreId, monitor_dni:c.monitorDni||null, bloqueado: !!c.bloqueado}; }
 function rowToInscripcion(r){ return {id:r.id, dni:r.dni, cursoId:r.curso_id}; }
 function rowToAsistencia(r){
   return {id:r.id, dni:r.dni, cursoId:r.curso_id, semana:r.semana, asistio:r.asistio, devocional:r.devocional, intercesion:r.intercesion, fecha:r.fecha};
@@ -321,18 +321,47 @@ function handleScanResult(text){
     toast("Alumno no encontrado.", "err");
     return;
   }
-  var inscrito = db.inscripciones.some(function(i){ return i.dni===dni && i.cursoId===cursoId; });
-  if(!inscrito){
-    statusEl.textContent = user.nombre + " " + user.apellido + " no está inscrito en este curso.";
-    toast("Alumno no inscrito en el curso seleccionado.", "err");
-    return;
-  }
+
   if(modo === "intercesion"){
-    upsertAsistenciaOptimista(dni, cursoId, semana, {intercesion:true});
-    statusEl.textContent = "\u2713 Intercesión registrada: " + user.nombre + " " + user.apellido;
-    toast("Intercesión registrada: " + user.nombre + " " + user.apellido, "ok");
-    if(adminIntercesionState.cursoId === cursoId) renderAdminIntercesionTable();
+    if(cursoId){
+      // Curso específico seleccionado.
+      var inscritoUno = db.inscripciones.some(function(i){ return i.dni===dni && i.cursoId===cursoId; });
+      if(!inscritoUno){
+        statusEl.textContent = user.nombre + " " + user.apellido + " no está inscrito en este curso.";
+        toast("Alumno no inscrito en el curso seleccionado.", "err");
+        return;
+      }
+      upsertAsistenciaOptimista(dni, cursoId, semana, {intercesion:true});
+      statusEl.textContent = "\u2713 Intercesión registrada: " + user.nombre + " " + user.apellido;
+      toast("Intercesión registrada: " + user.nombre + " " + user.apellido, "ok");
+    } else {
+      // "Todos los cursos": se registra en cada curso en el que el alumno esté
+      // inscrito dentro del trimestre activo de Intercesión.
+      var trimestreActivo = adminIntercesionState.trimestreId;
+      var cursosDelAlumno = cursosDeAlumno(dni).filter(function(c){ return c.trimestreId === trimestreActivo; });
+      if(!cursosDelAlumno.length){
+        statusEl.textContent = user.nombre + " " + user.apellido + " no está inscrito en ningún curso de este trimestre.";
+        toast("Alumno no inscrito en este trimestre.", "err");
+        return;
+      }
+      cursosDelAlumno.forEach(function(c){ upsertAsistenciaOptimista(dni, c.id, semana, {intercesion:true}); });
+      statusEl.textContent = "\u2713 Intercesión registrada: " + user.nombre + " " + user.apellido + " (" + cursosDelAlumno.length + " curso" + (cursosDelAlumno.length===1?"":"s") + ")";
+      toast("Intercesión registrada: " + user.nombre + " " + user.apellido, "ok");
+    }
+    renderAdminIntercesionTable();
   } else {
+    var inscritoAsis = db.inscripciones.some(function(i){ return i.dni===dni && i.cursoId===cursoId; });
+    if(!inscritoAsis){
+      statusEl.textContent = user.nombre + " " + user.apellido + " no está inscrito en este curso.";
+      toast("Alumno no inscrito en el curso seleccionado.", "err");
+      return;
+    }
+    var cursoAsis = findCurso(cursoId);
+    if(cursoAsis && cursoAsis.bloqueado){
+      statusEl.textContent = "Este curso está bloqueado. No se puede registrar asistencia.";
+      toast("Curso bloqueado.", "err");
+      return;
+    }
     upsertAsistenciaOptimista(dni, cursoId, semana, {asistio:true, fecha:new Date().toISOString()});
     statusEl.textContent = "\u2713 Asistencia registrada: " + user.nombre + " " + user.apellido;
     toast("Asistencia registrada: " + user.nombre + " " + user.apellido, "ok");
@@ -369,10 +398,11 @@ function modalShell(title, bodyHtml, footHtml, extraClass){
 function openQrScanModal(cursoId, semana, modo){
   var curso = findCurso(cursoId);
   var esInterc = modo === "intercesion";
+  var subtitulo = curso ? curso.nombre : (esInterc ? "Todos los cursos" : "");
   var html = modalShell(
     esInterc ? "Escanear QR de intercesión" : "Escanear QR de asistencia",
     '<p style="margin-top:0;color:var(--ink-soft);font-size:.88rem">' +
-      escapeHtml(curso ? curso.nombre : "") + ' &middot; Semana ' + semana + '</p>' +
+      escapeHtml(subtitulo) + ' &middot; Semana ' + semana + '</p>' +
       '<video id="qr-video" autoplay muted></video>' +
       '<canvas id="qr-canvas" class="hidden"></canvas>' +
       '<div class="qr-scan-status" id="qr-scan-status">Preparando cámara...</div>',
@@ -539,22 +569,25 @@ function renderMonitorTable(){
 
   var rows = alumnos.map(function(a){
     var r = getAsistencia(a.dni, cursoId, semana) || {asistio:false, devocional:false, intercesion:false, fecha:null};
+    var dis = curso.bloqueado ? "disabled" : "";
     return '<tr>' +
       '<td><strong>'+escapeHtml(a.apellido+" "+a.nombre)+'</strong><br><span style="color:var(--ink-soft);font-size:.78rem">DNI '+escapeHtml(a.dni)+'</span></td>' +
-      '<td class="chk-cell"><input type="checkbox" class="chk" data-action="toggle" data-dni="'+a.dni+'" data-campo="asistio" '+(r.asistio?"checked":"")+'></td>' +
-      '<td class="chk-cell"><input type="checkbox" class="chk" data-action="toggle" data-dni="'+a.dni+'" data-campo="devocional" '+(r.devocional?"checked":"")+'></td>' +
-      '<td class="chk-cell"><input type="checkbox" class="chk" data-action="toggle" data-dni="'+a.dni+'" data-campo="intercesion" '+(r.intercesion?"checked":"")+'></td>' +
+      '<td class="chk-cell"><input type="checkbox" class="chk" data-action="toggle" data-dni="'+a.dni+'" data-campo="asistio" '+(r.asistio?"checked":"")+' '+dis+'></td>' +
+      '<td class="chk-cell"><input type="checkbox" class="chk" data-action="toggle" data-dni="'+a.dni+'" data-campo="devocional" '+(r.devocional?"checked":"")+' '+dis+'></td>' +
+      '<td class="chk-cell"><input type="checkbox" class="chk" data-action="toggle" data-dni="'+a.dni+'" data-campo="intercesion" '+(r.intercesion?"checked":"")+' '+dis+'></td>' +
       '<td style="font-size:.78rem;color:var(--ink-soft)">'+(r.fecha?fmtDate(r.fecha):'&mdash;')+'</td>' +
-      '<td><button class="btn small danger" data-action="reset-semana" data-dni="'+a.dni+'">Restablecer</button></td>' +
+      '<td><button class="btn small danger" data-action="reset-semana" data-dni="'+a.dni+'" '+dis+'>Restablecer</button></td>' +
     '</tr>';
   }).join("");
 
   var totalInscritos = inscritosDeCurso(cursoId).length;
   var presentesSemana = inscritosDeCurso(cursoId).filter(function(a){ var r=getAsistencia(a.dni,cursoId,semana); return r && r.asistio; }).length;
+  var avisoBloqueo = curso.bloqueado ? '<p class="hint-text" style="color:var(--warn);font-weight:700;margin-top:0">Este curso fue bloqueado por el administrador. No se pueden registrar ni modificar asistencias.</p>' : '';
 
   host.innerHTML =
     '<div class="card">' +
-      '<h2>'+escapeHtml(curso.nombre)+'</h2>' +
+      '<h2>'+escapeHtml(curso.nombre)+(curso.bloqueado?' <span class="badge-warn">Bloqueado</span>':'')+'</h2>' +
+      avisoBloqueo +
       '<div class="stat-row">' +
         '<div class="stat"><div class="num">'+totalInscritos+'</div><div class="lbl">Inscritos</div></div>' +
         '<div class="stat"><div class="num">'+presentesSemana+'</div><div class="lbl">Presentes semana '+semana+'</div></div>' +
@@ -676,6 +709,7 @@ var adminViewState = {
   filtroCursosTrimestre:"",
   filtroAlumnosTrimestre:"",
   filtroAlumnosCurso:"",
+  filtroAlumnosBuscar:"",
   filtroMonitoresTrimestre:"",
   masivoInscTrimestre:""
 };
@@ -721,14 +755,16 @@ function renderAdminCursos(host){
     var t = findTrimestre(c.trimestreId);
     var m = findUsuario(c.monitorDni);
     var n = inscritosDeCurso(c.id).length;
+    var badgeBloqueo = c.bloqueado ? ' <span class="badge-warn">Bloqueado</span>' : '';
     return '<tr>' +
-      '<td><strong>'+escapeHtml(c.nombre)+'</strong></td>' +
+      '<td><strong>'+escapeHtml(c.nombre)+'</strong>'+badgeBloqueo+'</td>' +
       '<td>'+escapeHtml(t?t.nombre:"—")+'</td>' +
       '<td>'+escapeHtml(m?m.nombre+" "+m.apellido:"Sin asignar")+'</td>' +
       '<td>'+n+'</td>' +
       '<td class="btn-row">' +
         '<button class="btn small secondary" data-action="edit-curso" data-id="'+c.id+'">Editar</button>' +
         '<button class="btn small danger" data-action="del-curso" data-id="'+c.id+'">Eliminar</button>' +
+        '<button class="btn small '+(c.bloqueado?"secondary":"ghost")+'" data-action="toggle-bloqueo-curso" data-id="'+c.id+'">'+(c.bloqueado?"Desbloquear":"Bloquear")+'</button>' +
       '</td>' +
     '</tr>';
   }).join("");
@@ -758,7 +794,6 @@ function renderAdminCursos(host){
 }
 
 function renderAdminPersonas(host, rol){
-  var titulo = rol==="estudiante" ? "Alumnos" : "Monitores";
   var esAlumno = rol==="estudiante";
   var filtroTrimestre = esAlumno ? adminViewState.filtroAlumnosTrimestre : adminViewState.filtroMonitoresTrimestre;
   var filtroCurso = esAlumno ? adminViewState.filtroAlumnosCurso : "";
@@ -769,6 +804,59 @@ function renderAdminPersonas(host, rol){
     filtroCurso = "";
     adminViewState.filtroAlumnosCurso = "";
   }
+
+  var opcionesTrimestre = '<option value="">Todos los trimestres</option>' + db.trimestres.map(function(t){
+    return '<option value="'+t.id+'" '+(t.id===filtroTrimestre?"selected":"")+'>'+escapeHtml(t.nombre)+'</option>';
+  }).join("");
+  var opcionesCurso = '<option value="">Todos los cursos</option>' + cursosParaFiltro.map(function(c){
+    return '<option value="'+c.id+'" '+(c.id===filtroCurso?"selected":"")+'>'+escapeHtml(c.nombre)+'</option>';
+  }).join("");
+
+  var filtrosHtml = '<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end">' +
+    '<div class="field"><label>Trimestre</label><select id="filtro-personas-trimestre">'+opcionesTrimestre+'</select></div>' +
+    (esAlumno ? '<div class="field"><label>Curso</label><select id="filtro-personas-curso">'+opcionesCurso+'</select></div>' : '') +
+    (esAlumno ? '<div class="field"><label>Buscar alumno</label><input type="text" id="filtro-personas-buscar" placeholder="Nombre o apellido..." value="'+escapeHtml(adminViewState.filtroAlumnosBuscar)+'"></div>' : '') +
+  '</div>';
+
+  host.innerHTML =
+    '<div class="card">' +
+      '<div id="personas-header" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px"></div>' +
+      '<div class="toolbar" style="margin-top:14px;margin-bottom:0;justify-content:space-between">' +
+        filtrosHtml +
+        '<button class="btn" data-action="new-persona" data-rol="'+rol+'">+ Nuevo '+(esAlumno?"alumno":"monitor")+'</button>' +
+      '</div>' +
+      '<div id="personas-content"></div>' +
+    '</div>';
+
+  $("#filtro-personas-trimestre").addEventListener("change", function(e){
+    if(esAlumno){
+      adminViewState.filtroAlumnosTrimestre = e.target.value;
+      adminViewState.filtroAlumnosCurso = "";
+    } else {
+      adminViewState.filtroMonitoresTrimestre = e.target.value;
+    }
+    renderAdminTab();
+  });
+  var selCurso = document.getElementById("filtro-personas-curso");
+  if(selCurso) selCurso.addEventListener("change", function(e){
+    adminViewState.filtroAlumnosCurso = e.target.value;
+    renderAdminPersonasContent(rol);
+  });
+  var inpBuscar = document.getElementById("filtro-personas-buscar");
+  if(inpBuscar) inpBuscar.addEventListener("input", function(e){
+    adminViewState.filtroAlumnosBuscar = e.target.value;
+    renderAdminPersonasContent(rol);
+  });
+
+  renderAdminPersonasContent(rol);
+}
+
+function renderAdminPersonasContent(rol){
+  var titulo = rol==="estudiante" ? "Alumnos" : "Monitores";
+  var esAlumno = rol==="estudiante";
+  var filtroTrimestre = esAlumno ? adminViewState.filtroAlumnosTrimestre : adminViewState.filtroMonitoresTrimestre;
+  var filtroCurso = esAlumno ? adminViewState.filtroAlumnosCurso : "";
+  var textoBusqueda = esAlumno ? normalize(adminViewState.filtroAlumnosBuscar) : "";
 
   // Una persona aparece en esta lista si su rol base coincide, O si además de su rol
   // base tiene inscripciones (como alumno) o cursos asignados (como monitor) — esto
@@ -783,6 +871,9 @@ function renderAdminPersonas(host, rol){
     if(filtroCurso) return cursosPersona.some(function(c){ return c.id===filtroCurso; });
     if(filtroTrimestre) return cursosPersona.some(function(c){ return c.trimestreId===filtroTrimestre; });
     return true;
+  }).filter(function(u){
+    if(!textoBusqueda) return true;
+    return normalize(u.nombre+" "+u.apellido).indexOf(textoBusqueda) > -1;
   }).sort(function(a,b){ return (a.apellido+a.nombre).localeCompare(b.apellido+b.nombre); });
 
   var rows = lista.map(function(u){
@@ -801,52 +892,17 @@ function renderAdminPersonas(host, rol){
       '<td style="font-size:.82rem">'+cursosTxt+'</td>' +
       '<td class="btn-row">' +
         '<button class="btn small secondary" data-action="edit-persona" data-dni="'+u.dni+'" data-rol="'+rol+'">Editar</button>' +
-        (esAlumno ? '' : '<button class="btn small ghost" data-action="inscribir-persona" data-dni="'+u.dni+'">Inscribir</button>') +
         '<button class="btn small danger" data-action="del-persona" data-dni="'+u.dni+'">Eliminar</button>' +
       '</td>' +
     '</tr>';
   }).join("");
 
-  var opcionesTrimestre = '<option value="">Todos los trimestres</option>' + db.trimestres.map(function(t){
-    return '<option value="'+t.id+'" '+(t.id===filtroTrimestre?"selected":"")+'>'+escapeHtml(t.nombre)+'</option>';
-  }).join("");
-  var opcionesCurso = '<option value="">Todos los cursos</option>' + cursosParaFiltro.map(function(c){
-    return '<option value="'+c.id+'" '+(c.id===filtroCurso?"selected":"")+'>'+escapeHtml(c.nombre)+'</option>';
-  }).join("");
+  document.getElementById("personas-header").innerHTML =
+    '<h2 style="margin:0">'+titulo+' <span class="badge-muted">'+countLabel(lista.length, esAlumno?"alumno":"monitor", esAlumno?"alumnos":"monitores")+'</span></h2>';
 
-  var filtrosHtml = '<div style="display:flex;gap:14px;flex-wrap:wrap">' +
-    '<div class="field"><label>Trimestre</label><select id="filtro-personas-trimestre">'+opcionesTrimestre+'</select></div>' +
-    (esAlumno ? '<div class="field"><label>Curso</label><select id="filtro-personas-curso">'+opcionesCurso+'</select></div>' : '') +
-  '</div>';
-
-  host.innerHTML =
-    '<div class="card">' +
-      '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">' +
-        '<h2 style="margin:0">'+titulo+' <span class="badge-muted">'+countLabel(lista.length, esAlumno?"alumno":"monitor", esAlumno?"alumnos":"monitores")+'</span></h2>' +
-      '</div>' +
-      '<div class="toolbar" style="margin-top:14px;margin-bottom:0;justify-content:space-between">' +
-        filtrosHtml +
-        '<button class="btn" data-action="new-persona" data-rol="'+rol+'">+ Nuevo '+(esAlumno?"alumno":"monitor")+'</button>' +
-      '</div>' +
-      (lista.length ?
-        '<div class="table-wrap" style="margin-top:16px"><table><thead><tr><th>Nombre</th><th>DNI (usuario)</th><th>Celular (clave)</th><th>Cursos</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'
-        : '<div class="empty"><p>No hay '+(esAlumno?"alumnos":"monitores")+' para este filtro.</p></div>') +
-    '</div>';
-
-  $("#filtro-personas-trimestre").addEventListener("change", function(e){
-    if(esAlumno){
-      adminViewState.filtroAlumnosTrimestre = e.target.value;
-      adminViewState.filtroAlumnosCurso = "";
-    } else {
-      adminViewState.filtroMonitoresTrimestre = e.target.value;
-    }
-    renderAdminTab();
-  });
-  var selCurso = document.getElementById("filtro-personas-curso");
-  if(selCurso) selCurso.addEventListener("change", function(e){
-    adminViewState.filtroAlumnosCurso = e.target.value;
-    renderAdminTab();
-  });
+  document.getElementById("personas-content").innerHTML = lista.length ?
+    '<div class="table-wrap" style="margin-top:16px"><table><thead><tr><th>Nombre</th><th>DNI (usuario)</th><th>Celular (clave)</th><th>Cursos</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'
+    : '<div class="empty" style="margin-top:16px"><p>No hay '+(esAlumno?"alumnos":"monitores")+' para este filtro.</p></div>';
 }
 
 function renderAdminTrimestres(host){
@@ -969,10 +1025,10 @@ function renderAdminIntercesionTable(){
 
   var totalInscritos = filas.length;
   var totalInterc = filas.filter(function(f){ var r=getAsistencia(f.alumno.dni,f.curso.id,semana); return r && r.intercesion; }).length;
-  var avisoEscaneo = !cursoId ? '<p class="hint-text" style="color:var(--warn);margin-top:0">Para escanear código QR, seleccione un curso específico (no "Todos los cursos").</p>' : '';
+  var avisoTodos = !cursoId ? '<p class="hint-text" style="margin-top:0">Con "Todos los cursos" seleccionado, cada QR escaneado registra intercesión en todos los cursos en los que el alumno esté inscrito este trimestre.</p>' : '';
 
   host.innerHTML =
-    avisoEscaneo +
+    avisoTodos +
     '<div class="stat-row">' +
       '<div class="stat"><div class="num">'+totalInscritos+'</div><div class="lbl">'+(mostrarColumnaCurso?"Inscripciones":"Inscritos")+'</div></div>' +
       '<div class="stat"><div class="num">'+totalInterc+'</div><div class="lbl">Con intercesión semana '+semana+'</div></div>' +
@@ -1152,13 +1208,15 @@ document.addEventListener("click", async function(e){
         var cursos = cursosDeMonitor(user.dni).filter(function(c){ return c.trimestreId === monitorViewState.trimestreId; });
         var cursoId = monitorViewState.cursoId || (cursos[0] && cursos[0].id);
         if(!cursoId){ toast("No tiene un curso asignado en este trimestre.", "err"); break; }
+        var cursoParaEscaneo = findCurso(cursoId);
+        if(cursoParaEscaneo && cursoParaEscaneo.bloqueado){ toast("Este curso está bloqueado por el administrador.", "err"); break; }
         openQrScanModal(cursoId, monitorViewState.semana);
         break;
       }
       case "show-my-qr": openQrShowModal(user.dni); break;
 
       case "open-scan-picker-intercesion": {
-        if(!adminIntercesionState.cursoId){ toast("Seleccione un curso en el módulo de Intercesión.", "err"); break; }
+        if(!adminIntercesionState.trimestreId){ toast("Seleccione un trimestre en el módulo de Intercesión.", "err"); break; }
         openQrScanModal(adminIntercesionState.cursoId, adminIntercesionState.semana, "intercesion");
         break;
       }
@@ -1181,6 +1239,8 @@ document.addEventListener("click", async function(e){
 
       case "set-semana": monitorViewState.semana = parseInt(el.getAttribute("data-semana"),10); renderMonitorTable(); break;
       case "toggle": {
+        var cursoTog = findCurso(monitorViewState.cursoId);
+        if(cursoTog && cursoTog.bloqueado){ toast("Este curso está bloqueado por el administrador.", "err"); renderMonitorTable(); break; }
         var dni = el.getAttribute("data-dni"), campo = el.getAttribute("data-campo");
         var patch = {}; patch[campo] = el.checked;
         if(el.checked && campo==="asistio") patch.fecha = new Date().toISOString();
@@ -1189,6 +1249,8 @@ document.addEventListener("click", async function(e){
         break;
       }
       case "reset-semana": {
+        var cursoRes = findCurso(monitorViewState.cursoId);
+        if(cursoRes && cursoRes.bloqueado){ toast("Este curso está bloqueado por el administrador.", "err"); break; }
         var d = el.getAttribute("data-dni");
         resetAsistenciaOptimista(d, monitorViewState.cursoId, monitorViewState.semana);
         toast("Registro restablecido.");
@@ -1214,11 +1276,23 @@ document.addEventListener("click", async function(e){
         var monitorDni = document.getElementById("f-curso-monitor").value;
         if(!nombre){ toast("Ingrese el nombre del curso.", "err"); break; }
         var id = el.getAttribute("data-id");
-        var row = cursoToRow({nombre:nombre, trimestreId:trimestreId, monitorDni:monitorDni||null});
+        var cursoExistente = id ? findCurso(id) : null;
+        var row = cursoToRow({nombre:nombre, trimestreId:trimestreId, monitorDni:monitorDni||null, bloqueado: cursoExistente ? cursoExistente.bloqueado : false});
         if(id) await sbUpdate("cursos", {id:id}, row);
         else await sbInsert("cursos", row);
         await fetchAll();
         closeModal(); toast("Curso guardado."); renderAdminTab();
+        break;
+      }
+      case "toggle-bloqueo-curso": {
+        var bcid = el.getAttribute("data-id");
+        var cursoB = findCurso(bcid);
+        if(!cursoB) break;
+        var nuevoEstado = !cursoB.bloqueado;
+        await sbUpdate("cursos", {id:bcid}, {bloqueado: nuevoEstado});
+        await fetchAll();
+        toast(nuevoEstado ? "Curso bloqueado. El monitor ya no podrá modificarlo." : "Curso desbloqueado.");
+        renderAdminTab();
         break;
       }
 
