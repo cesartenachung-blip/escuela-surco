@@ -201,11 +201,12 @@ function renderQrInto(container, dni){
 // ---------------------------------------------------------------------
 // Escáner de cámara (jsQR)
 // ---------------------------------------------------------------------
-var scannerState = { stream:null, raf:null, cooldownDni:null, cooldownUntil:0, cursoId:null, semana:null };
+var scannerState = { stream:null, raf:null, cooldownDni:null, cooldownUntil:0, cursoId:null, semana:null, modo:"asistencia" };
 
-function startScanner(cursoId, semana){
+function startScanner(cursoId, semana, modo){
   scannerState.cursoId = cursoId;
   scannerState.semana = semana;
+  scannerState.modo = modo || "asistencia";
   var video = document.getElementById("qr-video");
   var statusEl = document.getElementById("qr-scan-status");
   statusEl.textContent = "Activando cámara...";
@@ -263,7 +264,7 @@ function handleScanResult(text){
   scannerState.cooldownUntil = now + 2500;
 
   var user = findUsuario(dni);
-  var cursoId = scannerState.cursoId, semana = scannerState.semana;
+  var cursoId = scannerState.cursoId, semana = scannerState.semana, modo = scannerState.modo;
   if(!user){
     statusEl.textContent = "DNI " + dni + " no está registrado en el sistema.";
     toast("Alumno no encontrado.", "err");
@@ -275,10 +276,17 @@ function handleScanResult(text){
     toast("Alumno no inscrito en el curso seleccionado.", "err");
     return;
   }
-  upsertAsistenciaOptimista(dni, cursoId, semana, {asistio:true, fecha:new Date().toISOString()});
-  statusEl.textContent = "\u2713 Asistencia registrada: " + user.nombre + " " + user.apellido;
-  toast("Asistencia registrada: " + user.nombre + " " + user.apellido, "ok");
-  if(monitorViewState.cursoId === cursoId) renderMonitorTable();
+  if(modo === "intercesion"){
+    upsertAsistenciaOptimista(dni, cursoId, semana, {intercesion:true});
+    statusEl.textContent = "\u2713 Intercesión registrada: " + user.nombre + " " + user.apellido;
+    toast("Intercesión registrada: " + user.nombre + " " + user.apellido, "ok");
+    if(adminIntercesionState.cursoId === cursoId) renderAdminIntercesionTable();
+  } else {
+    upsertAsistenciaOptimista(dni, cursoId, semana, {asistio:true, fecha:new Date().toISOString()});
+    statusEl.textContent = "\u2713 Asistencia registrada: " + user.nombre + " " + user.apellido;
+    toast("Asistencia registrada: " + user.nombre + " " + user.apellido, "ok");
+    if(monitorViewState.cursoId === cursoId) renderMonitorTable();
+  }
 }
 
 // ---------------------------------------------------------------------
@@ -307,10 +315,11 @@ function modalShell(title, bodyHtml, footHtml, extraClass){
     '</div>'
   );
 }
-function openQrScanModal(cursoId, semana){
+function openQrScanModal(cursoId, semana, modo){
   var curso = findCurso(cursoId);
+  var esInterc = modo === "intercesion";
   var html = modalShell(
-    "Escanear QR de asistencia",
+    esInterc ? "Escanear QR de intercesión" : "Escanear QR de asistencia",
     '<p style="margin-top:0;color:var(--ink-soft);font-size:.88rem">' +
       escapeHtml(curso ? curso.nombre : "") + ' &middot; Semana ' + semana + '</p>' +
       '<video id="qr-video" autoplay muted></video>' +
@@ -319,7 +328,7 @@ function openQrScanModal(cursoId, semana){
     '<button class="btn secondary" data-action="close-modal">Cerrar</button>'
   );
   openModal(html);
-  startScanner(cursoId, semana);
+  startScanner(cursoId, semana, modo);
 }
 function openQrShowModal(dni){
   var user = findUsuario(dni);
@@ -610,6 +619,7 @@ var adminViewState = {
   filtroMonitoresTrimestre:"",
   masivoInscTrimestre:""
 };
+var adminIntercesionState = { trimestreId:null, cursoId:null, semana:1, q:"" };
 
 function countLabel(n, singular, plural){ return n + " " + (n===1?singular:plural); }
 
@@ -619,6 +629,7 @@ function renderAdminView(user){
     ["alumnos","Alumnos"],
     ["monitores","Monitores"],
     ["trimestres","Trimestres"],
+    ["intercesion","Intercesión"],
     ["masivo","Carga masiva"]
   ];
   var html = '<div class="tabs-nav">' + tabs.map(function(t){
@@ -635,6 +646,7 @@ function renderAdminTab(){
     case "alumnos": return renderAdminPersonas(host, "estudiante");
     case "monitores": return renderAdminPersonas(host, "monitor");
     case "trimestres": return renderAdminTrimestres(host);
+    case "intercesion": return renderAdminIntercesion(host);
     case "masivo": return renderAdminMasivo(host);
   }
 }
@@ -783,6 +795,100 @@ function renderAdminTrimestres(host){
         '<div class="table-wrap"><table><thead><tr><th>Trimestre</th><th>Cursos</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'
         : '<div class="empty"><p>No hay trimestres registrados.</p></div>') +
     '</div>';
+}
+
+function renderAdminIntercesion(host){
+  var trimestres = db.trimestres;
+  if(!adminIntercesionState.trimestreId && trimestres.length) adminIntercesionState.trimestreId = trimestres[0].id;
+
+  var cursosTrim = cursosDeTrimestre(adminIntercesionState.trimestreId);
+  if(!cursosTrim.some(function(c){ return c.id === adminIntercesionState.cursoId; })){
+    adminIntercesionState.cursoId = cursosTrim.length ? cursosTrim[0].id : null;
+  }
+
+  var opcionesTrimestre = trimestres.map(function(t){
+    return '<option value="'+t.id+'" '+(t.id===adminIntercesionState.trimestreId?"selected":"")+'>'+escapeHtml(t.nombre)+'</option>';
+  }).join("");
+  var opcionesCurso = cursosTrim.map(function(c){
+    return '<option value="'+c.id+'" '+(c.id===adminIntercesionState.cursoId?"selected":"")+'>'+escapeHtml(c.nombre)+'</option>';
+  }).join("");
+
+  host.innerHTML =
+    '<div class="card">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">' +
+        '<h2 style="margin:0">Intercesión</h2>' +
+        '<button class="btn" data-action="open-scan-picker-intercesion">Escanear QR Intercesión</button>' +
+      '</div>' +
+      '<div class="toolbar" style="margin-top:14px">' +
+        '<div class="field"><label>Trimestre</label><select id="ic-trimestre">'+opcionesTrimestre+'</select></div>' +
+        (cursosTrim.length ? '<div class="field"><label>Curso</label><select id="ic-curso">'+opcionesCurso+'</select></div>' : '') +
+        '<div class="field grow"><label>Buscar alumno</label><input type="text" id="ic-buscar" placeholder="Nombre o apellido..." value="'+escapeHtml(adminIntercesionState.q)+'"></div>' +
+      '</div>' +
+      '<div id="ic-content"></div>' +
+    '</div>';
+
+  $("#ic-trimestre").addEventListener("change", function(e){
+    adminIntercesionState.trimestreId = e.target.value;
+    adminIntercesionState.cursoId = null;
+    renderAdminTab();
+  });
+  var selCurso = document.getElementById("ic-curso");
+  if(selCurso) selCurso.addEventListener("change", function(e){
+    adminIntercesionState.cursoId = e.target.value;
+    renderAdminIntercesionTable();
+  });
+  document.getElementById("ic-buscar").addEventListener("input", function(e){
+    adminIntercesionState.q = e.target.value;
+    renderAdminIntercesionTable();
+  });
+
+  renderAdminIntercesionTable();
+}
+
+function renderAdminIntercesionTable(){
+  var host = document.getElementById("ic-content");
+  if(!host) return;
+  var cursoId = adminIntercesionState.cursoId;
+  if(!cursoId){
+    host.innerHTML = '<div class="empty"><p>No hay cursos en el trimestre seleccionado.</p></div>';
+    return;
+  }
+  var alumnos = inscritosDeCurso(cursoId).sort(function(a,b){
+    return (a.apellido+a.nombre).localeCompare(b.apellido+b.nombre);
+  });
+  var q = normalize(adminIntercesionState.q);
+  if(q){
+    alumnos = alumnos.filter(function(a){ return normalize(a.nombre+" "+a.apellido).indexOf(q) > -1; });
+  }
+  var semana = adminIntercesionState.semana;
+
+  var weekTabs = "";
+  for(var w=1; w<=TOTAL_SEMANAS; w++){
+    var anyDone = inscritosDeCurso(cursoId).some(function(a){ var r=getAsistencia(a.dni,cursoId,w); return r && r.intercesion; });
+    weekTabs += '<button class="week-tab '+(w===semana?"active":"")+' '+(anyDone?"done":"")+'" data-action="set-semana-ic" data-semana="'+w+'">Semana '+w+'</button>';
+  }
+
+  var rows = alumnos.map(function(a){
+    var r = getAsistencia(a.dni, cursoId, semana) || {intercesion:false, fecha:null};
+    return '<tr>' +
+      '<td><strong>'+escapeHtml(a.apellido+" "+a.nombre)+'</strong><br><span style="color:var(--ink-soft);font-size:.78rem">DNI '+escapeHtml(a.dni)+'</span></td>' +
+      '<td class="chk-cell"><input type="checkbox" class="chk" data-action="toggle-interc" data-dni="'+a.dni+'" '+(r.intercesion?"checked":"")+'></td>' +
+      '<td><button class="btn small danger" data-action="reset-semana-interc" data-dni="'+a.dni+'">Restablecer</button></td>' +
+    '</tr>';
+  }).join("");
+
+  var totalInscritos = inscritosDeCurso(cursoId).length;
+  var totalInterc = inscritosDeCurso(cursoId).filter(function(a){ var r=getAsistencia(a.dni,cursoId,semana); return r && r.intercesion; }).length;
+
+  host.innerHTML =
+    '<div class="stat-row">' +
+      '<div class="stat"><div class="num">'+totalInscritos+'</div><div class="lbl">Inscritos</div></div>' +
+      '<div class="stat"><div class="num">'+totalInterc+'</div><div class="lbl">Con intercesión semana '+semana+'</div></div>' +
+    '</div>' +
+    '<div class="week-tabs">'+weekTabs+'</div>' +
+    (alumnos.length ?
+      '<div class="table-wrap"><table><thead><tr><th>Alumno</th><th>Intercesión</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'
+      : '<div class="empty"><p>No se encontraron alumnos inscritos'+(q?" con ese criterio":"")+'.</p></div>');
 }
 
 function renderAdminMasivo(host){
@@ -941,6 +1047,26 @@ document.addEventListener("click", async function(e){
         break;
       }
       case "show-my-qr": openQrShowModal(user.dni); break;
+
+      case "open-scan-picker-intercesion": {
+        if(!adminIntercesionState.cursoId){ toast("Seleccione un curso en el módulo de Intercesión.", "err"); break; }
+        openQrScanModal(adminIntercesionState.cursoId, adminIntercesionState.semana, "intercesion");
+        break;
+      }
+      case "set-semana-ic": adminIntercesionState.semana = parseInt(el.getAttribute("data-semana"),10); renderAdminIntercesionTable(); break;
+      case "toggle-interc": {
+        var icDni = el.getAttribute("data-dni");
+        upsertAsistenciaOptimista(icDni, adminIntercesionState.cursoId, adminIntercesionState.semana, {intercesion: el.checked});
+        renderAdminIntercesionTable();
+        break;
+      }
+      case "reset-semana-interc": {
+        var icDni2 = el.getAttribute("data-dni");
+        upsertAsistenciaOptimista(icDni2, adminIntercesionState.cursoId, adminIntercesionState.semana, {intercesion:false});
+        toast("Intercesión restablecida.");
+        renderAdminIntercesionTable();
+        break;
+      }
 
       case "set-semana": monitorViewState.semana = parseInt(el.getAttribute("data-semana"),10); renderMonitorTable(); break;
       case "toggle": {
