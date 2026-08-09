@@ -70,7 +70,13 @@ var db = { usuarios:[], trimestres:[], cursos:[], inscripciones:[], asistencia:[
 // Mapeo snake_case (Postgres) <-> camelCase (usado por las vistas)
 function rowToCurso(r){ return {id:r.id, nombre:r.nombre, trimestreId:r.trimestre_id, monitorDni:r.monitor_dni, bloqueado: !!r.bloqueado}; }
 function cursoToRow(c){ return {nombre:c.nombre, trimestre_id:c.trimestreId, monitor_dni:c.monitorDni||null, bloqueado: !!c.bloqueado}; }
-function rowToInscripcion(r){ return {id:r.id, dni:r.dni, cursoId:r.curso_id}; }
+function rowToInscripcion(r){
+  return {
+    id:r.id, dni:r.dni, cursoId:r.curso_id,
+    trabajoFinal: r.trabajo_final!=null ? Number(r.trabajo_final) : 0,
+    examenFinal: r.examen_final!=null ? Number(r.examen_final) : 0
+  };
+}
 function rowToAsistencia(r){
   return {id:r.id, dni:r.dni, cursoId:r.curso_id, semana:r.semana, asistio:r.asistio, devocional:r.devocional, intercesion:r.intercesion, fecha:r.fecha};
 }
@@ -543,6 +549,37 @@ function renderMonitorView(user){
   renderMonitorTable();
 }
 
+// ---------------------------------------------------------------------
+// Cálculo de notas finales (asistencia 1pt, devocional 2pts, intercesión 3pts)
+// ---------------------------------------------------------------------
+function calcularTotalesSemanas(dni, cursoId){
+  var totalAsis=0, totalDevo=0, totalInter=0;
+  for(var w=1; w<=TOTAL_SEMANAS; w++){
+    var r = getAsistencia(dni, cursoId, w);
+    if(r && r.asistio) totalAsis++;
+    if(r && r.devocional) totalDevo++;
+    if(r && r.intercesion) totalInter++;
+  }
+  return {totalAsis:totalAsis, totalDevo:totalDevo, totalInter:totalInter};
+}
+function calcularNotaFinal(dni, cursoId){
+  var t = calcularTotalesSemanas(dni, cursoId);
+  var ptsAsis = t.totalAsis*1, ptsDevo = t.totalDevo*2, ptsInter = t.totalInter*3;
+  var puntos = ptsAsis + ptsDevo + ptsInter;
+  var maxPuntos = TOTAL_SEMANAS*(1+2+3); // 54 con 9 semanas
+  var notaParticipacion = maxPuntos>0 ? (puntos/maxPuntos)*20 : 0;
+  var insc = db.inscripciones.find(function(i){ return i.dni===dni && i.cursoId===cursoId; });
+  var trabajo = insc ? Number(insc.trabajoFinal||0) : 0;
+  var examen = insc ? Number(insc.examenFinal||0) : 0;
+  var promedio = (notaParticipacion + trabajo + examen) / 3;
+  return {
+    totalAsis:t.totalAsis, totalDevo:t.totalDevo, totalInter:t.totalInter,
+    ptsAsis:ptsAsis, ptsDevo:ptsDevo, ptsInter:ptsInter,
+    notaParticipacion:notaParticipacion, trabajo:trabajo, examen:examen, promedio:promedio
+  };
+}
+
+
 function renderMonitorTable(){
   var host = document.getElementById("monitor-content");
   if(!host) return;
@@ -552,21 +589,36 @@ function renderMonitorTable(){
     return;
   }
   var curso = findCurso(cursoId);
-  var alumnos = inscritosDeCurso(cursoId).sort(function(a,b){
+  var todosInscritos = inscritosDeCurso(cursoId).sort(function(a,b){
     return (a.apellido+a.nombre).localeCompare(b.apellido+b.nombre);
   });
   var q = normalize(monitorViewState.q);
-  if(q){
-    alumnos = alumnos.filter(function(a){ return normalize(a.nombre+" "+a.apellido).indexOf(q) > -1; });
-  }
+  var alumnos = q ? todosInscritos.filter(function(a){ return normalize(a.nombre+" "+a.apellido).indexOf(q) > -1; }) : todosInscritos;
   var semana = monitorViewState.semana;
 
   var weekTabs = "";
   for(var w=1; w<=TOTAL_SEMANAS; w++){
-    var anyDone = inscritosDeCurso(cursoId).some(function(a){ var r=getAsistencia(a.dni,cursoId,w); return r && (r.asistio||r.devocional||r.intercesion); });
-    weekTabs += '<button class="week-tab '+(w===semana?"active":"")+' '+(anyDone?"done":"")+'" data-action="set-semana" data-semana="'+w+'">Semana '+w+'</button>';
+    var anyDone = todosInscritos.some(function(a){ var r=getAsistencia(a.dni,cursoId,w); return r && (r.asistio||r.devocional||r.intercesion); });
+    weekTabs += '<button class="week-tab '+(semana===w?"active":"")+' '+(anyDone?"done":"")+'" data-action="set-semana" data-semana="'+w+'">Semana '+w+'</button>';
   }
+  weekTabs += '<button class="week-tab '+(semana==="final"?"active":"")+'" data-action="set-semana" data-semana="final">Promedio Final</button>';
 
+  var avisoBloqueo = curso.bloqueado ? '<p class="hint-text" style="color:var(--warn);font-weight:700;margin-top:0">Este curso fue bloqueado por el administrador. No se pueden registrar ni modificar asistencias.</p>' : '';
+
+  var bodyHtml = semana === "final"
+    ? renderPromedioFinalHtml(cursoId, todosInscritos, curso)
+    : renderSemanaHtml(cursoId, alumnos, todosInscritos, semana, curso, q);
+
+  host.innerHTML =
+    '<div class="card">' +
+      '<h2>'+escapeHtml(curso.nombre)+(curso.bloqueado?' <span class="badge-warn">Bloqueado</span>':'')+'</h2>' +
+      avisoBloqueo +
+      '<div class="week-tabs">'+weekTabs+'</div>' +
+      bodyHtml +
+    '</div>';
+}
+
+function renderSemanaHtml(cursoId, alumnos, todosInscritos, semana, curso, q){
   var rows = alumnos.map(function(a){
     var r = getAsistencia(a.dni, cursoId, semana) || {asistio:false, devocional:false, intercesion:false, fecha:null};
     var dis = curso.bloqueado ? "disabled" : "";
@@ -580,23 +632,57 @@ function renderMonitorTable(){
     '</tr>';
   }).join("");
 
-  var totalInscritos = inscritosDeCurso(cursoId).length;
-  var presentesSemana = inscritosDeCurso(cursoId).filter(function(a){ var r=getAsistencia(a.dni,cursoId,semana); return r && r.asistio; }).length;
-  var avisoBloqueo = curso.bloqueado ? '<p class="hint-text" style="color:var(--warn);font-weight:700;margin-top:0">Este curso fue bloqueado por el administrador. No se pueden registrar ni modificar asistencias.</p>' : '';
+  var totalInscritos = todosInscritos.length;
+  var presentesSemana = todosInscritos.filter(function(a){ var r=getAsistencia(a.dni,cursoId,semana); return r && r.asistio; }).length;
+  var devocionalSemana = todosInscritos.filter(function(a){ var r=getAsistencia(a.dni,cursoId,semana); return r && r.devocional; }).length;
+  var intercesionSemana = todosInscritos.filter(function(a){ var r=getAsistencia(a.dni,cursoId,semana); return r && r.intercesion; }).length;
 
-  host.innerHTML =
-    '<div class="card">' +
-      '<h2>'+escapeHtml(curso.nombre)+(curso.bloqueado?' <span class="badge-warn">Bloqueado</span>':'')+'</h2>' +
-      avisoBloqueo +
-      '<div class="stat-row">' +
-        '<div class="stat"><div class="num">'+totalInscritos+'</div><div class="lbl">Inscritos</div></div>' +
-        '<div class="stat"><div class="num">'+presentesSemana+'</div><div class="lbl">Presentes semana '+semana+'</div></div>' +
+  return '<div class="stat-row compact">' +
+      '<div class="stat"><div class="num">'+totalInscritos+'</div><div class="lbl">Inscritos</div></div>' +
+      '<div class="stat"><div class="num">'+presentesSemana+'</div><div class="lbl">Presentes semana '+semana+'</div></div>' +
+      '<div class="stat"><div class="num">'+devocionalSemana+'</div><div class="lbl">Devocional semana '+semana+'</div></div>' +
+      '<div class="stat"><div class="num">'+intercesionSemana+'</div><div class="lbl">Intercesión semana '+semana+'</div></div>' +
+    '</div>' +
+    (alumnos.length ?
+      '<div class="table-wrap"><table><thead><tr><th>Alumno</th><th>Asistencia</th><th>Devocional</th><th>Intercesión</th><th>Registrado</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'
+      : '<div class="empty"><p>No se encontraron alumnos inscritos'+(q?" con ese criterio":"")+'.</p></div>');
+}
+
+function renderPromedioFinalHtml(cursoId, todosInscritos, curso){
+  var datos = todosInscritos.map(function(a){ return {alumno:a, notas: calcularNotaFinal(a.dni, cursoId)}; });
+  var ranking = datos.slice().sort(function(x,y){ return y.notas.promedio - x.notas.promedio; });
+  var top3 = ranking.slice(0,3);
+  var medallas = ["\u{1F947}","\u{1F948}","\u{1F949}"];
+
+  var top3Html = top3.length ?
+    '<div class="card" style="background:linear-gradient(135deg,#fff8e6,#ffffff);border:1.5px solid #eddca0;margin-bottom:18px">' +
+      '<h3 style="margin-top:0">Top 3 del curso — Reconocimiento</h3>' +
+      '<div class="stat-row compact">' +
+        top3.map(function(d,i){
+          return '<div class="stat"><div class="num">'+medallas[i]+'</div><div class="lbl">'+escapeHtml(d.alumno.nombre+" "+d.alumno.apellido)+'<br>'+d.notas.promedio.toFixed(1)+' / 20</div></div>';
+        }).join("") +
       '</div>' +
-      '<div class="week-tabs">'+weekTabs+'</div>' +
-      (alumnos.length ?
-        '<div class="table-wrap"><table><thead><tr><th>Alumno</th><th>Asistencia</th><th>Devocional</th><th>Intercesión</th><th>Registrado</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'
-        : '<div class="empty"><p>No se encontraron alumnos inscritos'+(q?" con ese criterio":"")+'.</p></div>') +
-    '</div>';
+    '</div>' : '';
+
+  var dis = curso.bloqueado ? "disabled" : "";
+  var rows = datos.map(function(d){
+    return '<tr>' +
+      '<td><strong>'+escapeHtml(d.alumno.apellido+" "+d.alumno.nombre)+'</strong></td>' +
+      '<td>'+d.notas.ptsAsis+' pts</td>' +
+      '<td>'+d.notas.ptsDevo+' pts</td>' +
+      '<td>'+d.notas.ptsInter+' pts</td>' +
+      '<td>'+d.notas.notaParticipacion.toFixed(1)+'</td>' +
+      '<td><input type="number" class="nota-input" min="0" max="20" step="0.5" value="'+d.notas.trabajo+'" data-action="set-nota" data-campo="trabajoFinal" data-dni="'+d.alumno.dni+'" '+dis+'></td>' +
+      '<td><input type="number" class="nota-input" min="0" max="20" step="0.5" value="'+d.notas.examen+'" data-action="set-nota" data-campo="examenFinal" data-dni="'+d.alumno.dni+'" '+dis+'></td>' +
+      '<td><strong>'+d.notas.promedio.toFixed(1)+'</strong></td>' +
+    '</tr>';
+  }).join("");
+
+  return top3Html +
+    '<p class="hint-text" style="margin-top:0">Nota de Participación: 1 punto por semana con asistencia, 2 por devocional y 3 por intercesión (máx. '+(TOTAL_SEMANAS*6)+' pts), convertidos a escala de 0 a 20. El Promedio Final es el promedio entre Participación, Trabajo Final y Examen Final.</p>' +
+    (datos.length ?
+      '<div class="table-wrap"><table><thead><tr><th>Alumno</th><th>Asistencia</th><th>Devocional</th><th>Intercesión</th><th>Participación</th><th>Trabajo Final</th><th>Examen Final</th><th>Promedio Final</th></tr></thead><tbody>'+rows+'</tbody></table></div>'
+      : '<div class="empty"><p>No hay alumnos inscritos en este curso.</p></div>');
 }
 
 // ---------------------------------------------------------------------
@@ -1237,7 +1323,12 @@ document.addEventListener("click", async function(e){
         break;
       }
 
-      case "set-semana": monitorViewState.semana = parseInt(el.getAttribute("data-semana"),10); renderMonitorTable(); break;
+      case "set-semana": {
+        var semVal = el.getAttribute("data-semana");
+        monitorViewState.semana = semVal === "final" ? "final" : parseInt(semVal, 10);
+        renderMonitorTable();
+        break;
+      }
       case "toggle": {
         var cursoTog = findCurso(monitorViewState.cursoId);
         if(cursoTog && cursoTog.bloqueado){ toast("Este curso está bloqueado por el administrador.", "err"); renderMonitorTable(); break; }
@@ -1404,6 +1495,33 @@ document.addEventListener("click", async function(e){
   }catch(err){
     console.error("Error procesando acción '"+action+"':", err);
   }
+});
+
+// Notas finales (Trabajo Final / Examen Final): se guardan al perder el foco
+// o presionar Enter (evento "change"), no en cada tecla, para no saturar la API.
+document.addEventListener("change", async function(e){
+  var el = e.target.closest && e.target.closest('[data-action="set-nota"]');
+  if(!el) return;
+  var dni = el.getAttribute("data-dni");
+  var campo = el.getAttribute("data-campo"); // trabajoFinal | examenFinal
+  var cursoId = monitorViewState.cursoId;
+  var val = parseFloat(el.value);
+  if(isNaN(val)) val = 0;
+  val = Math.max(0, Math.min(20, val));
+  el.value = val;
+
+  var insc = db.inscripciones.find(function(i){ return i.dni===dni && i.cursoId===cursoId; });
+  if(insc) insc[campo] = val;
+
+  var patch = {};
+  patch[campo === "trabajoFinal" ? "trabajo_final" : "examen_final"] = val;
+  try{
+    await sbUpdate("inscripciones", {dni:dni, curso_id:cursoId}, patch);
+    toast("Nota guardada.");
+  }catch(err){
+    // sbUpdate ya muestra un toast de error
+  }
+  renderMonitorTable();
 });
 
 // ---------------------------------------------------------------------

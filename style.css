@@ -129,11 +129,20 @@ input,select,textarea{font-family:inherit}
 .card h3{margin:0 0 12px;font-size:1rem;color:var(--ink)}
 
 .stat-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin-bottom:20px}
+.stat-row.compact{grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;margin-bottom:16px}
+.stat-row.compact .stat{padding:10px}
+.stat-row.compact .num{font-size:1.2rem}
+.stat-row.compact .lbl{font-size:.66rem}
 .stat{
   background:var(--field-bg);border-radius:14px;padding:16px;text-align:center;border:1.5px solid var(--line);
 }
 .stat .num{font-size:1.7rem;font-weight:800;color:var(--purple-2);font-family:Georgia,serif}
 .stat .lbl{font-size:.76rem;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.04em;margin-top:4px}
+.nota-input{
+  width:64px;padding:6px 8px;border-radius:8px;border:1.5px solid var(--field-border);background:var(--field-bg);
+  font-size:.86rem;text-align:center;color:var(--ink);
+}
+.nota-input:disabled{opacity:.5}
 
 table{width:100%;border-collapse:collapse;font-size:.92rem}
 th{

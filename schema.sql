@@ -28,16 +28,27 @@ create table if not exists cursos (
   nombre       text not null,
   trimestre_id text references trimestres(id) on delete cascade,
   monitor_dni  text references usuarios(dni) on delete set null,
+  bloqueado    boolean not null default false,
   created_at   timestamptz not null default now()
 );
 
+-- Migración idempotente: si la tabla "cursos" ya existía de una versión anterior
+-- (sin la columna "bloqueado"), esto la agrega sin afectar los datos existentes.
+alter table cursos add column if not exists bloqueado boolean not null default false;
+
 create table if not exists inscripciones (
-  id         text primary key default ('ins_' || substr(md5(random()::text || clock_timestamp()::text), 1, 10)),
-  dni        text not null references usuarios(dni) on delete cascade,
-  curso_id   text not null references cursos(id) on delete cascade,
-  created_at timestamptz not null default now(),
+  id            text primary key default ('ins_' || substr(md5(random()::text || clock_timestamp()::text), 1, 10)),
+  dni           text not null references usuarios(dni) on delete cascade,
+  curso_id      text not null references cursos(id) on delete cascade,
+  trabajo_final numeric not null default 0,
+  examen_final  numeric not null default 0,
+  created_at    timestamptz not null default now(),
   unique (dni, curso_id)
 );
+
+-- Migración idempotente para proyectos ya desplegados sin estas columnas.
+alter table inscripciones add column if not exists trabajo_final numeric not null default 0;
+alter table inscripciones add column if not exists examen_final numeric not null default 0;
 
 create table if not exists asistencia (
   id          text primary key default ('asis_' || substr(md5(random()::text || clock_timestamp()::text), 1, 10)),
