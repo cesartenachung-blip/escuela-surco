@@ -8,6 +8,7 @@
 
 var SESSION_KEY = "edl_aguaviva_session_v1"; // solo guarda la sesión de ESTE dispositivo
 var TOTAL_SEMANAS = 9;
+var NOTA_MINIMA_APROBATORIA = 14;
 var QR_PREFIX = "AGUAVIVA-EDL:";
 
 // ---------------------------------------------------------------------
@@ -564,18 +565,23 @@ function calcularTotalesSemanas(dni, cursoId){
 }
 function calcularNotaFinal(dni, cursoId){
   var t = calcularTotalesSemanas(dni, cursoId);
-  var ptsAsis = t.totalAsis*1, ptsDevo = t.totalDevo*2, ptsInter = t.totalInter*3;
+  var ptsAsis = t.totalAsis*3, ptsDevo = t.totalDevo*1, ptsInter = t.totalInter*1;
   var puntos = ptsAsis + ptsDevo + ptsInter;
-  var maxPuntos = TOTAL_SEMANAS*(1+2+3); // 54 con 9 semanas
+  var maxPuntos = TOTAL_SEMANAS*(3+1+1); // 45 con 9 semanas
   var notaParticipacion = maxPuntos>0 ? (puntos/maxPuntos)*20 : 0;
   var insc = db.inscripciones.find(function(i){ return i.dni===dni && i.cursoId===cursoId; });
   var trabajo = insc ? Number(insc.trabajoFinal||0) : 0;
   var examen = insc ? Number(insc.examenFinal||0) : 0;
   var promedio = (notaParticipacion + trabajo + examen) / 3;
+  // Si el monitor aún no calificó Trabajo Final y/o Examen Final (valor 0 = sin calificar),
+  // el curso se considera desaprobado sin importar el promedio.
+  var sinCalificar = trabajo <= 0 || examen <= 0;
+  var aprobado = !sinCalificar && promedio >= NOTA_MINIMA_APROBATORIA;
   return {
     totalAsis:t.totalAsis, totalDevo:t.totalDevo, totalInter:t.totalInter,
     ptsAsis:ptsAsis, ptsDevo:ptsDevo, ptsInter:ptsInter,
-    notaParticipacion:notaParticipacion, trabajo:trabajo, examen:examen, promedio:promedio
+    notaParticipacion:notaParticipacion, trabajo:trabajo, examen:examen, promedio:promedio,
+    sinCalificar:sinCalificar, aprobado:aprobado
   };
 }
 
@@ -666,6 +672,9 @@ function renderPromedioFinalHtml(cursoId, todosInscritos, curso){
 
   var dis = curso.bloqueado ? "disabled" : "";
   var rows = datos.map(function(d){
+    var estado = d.notas.sinCalificar
+      ? '<span class="badge-muted">Falta calificar</span>'
+      : (d.notas.aprobado ? '<span class="badge-ok">Aprobado</span>' : '<span class="badge-warn">Desaprobado</span>');
     return '<tr>' +
       '<td><strong>'+escapeHtml(d.alumno.apellido+" "+d.alumno.nombre)+'</strong></td>' +
       '<td>'+d.notas.ptsAsis+' pts</td>' +
@@ -675,13 +684,14 @@ function renderPromedioFinalHtml(cursoId, todosInscritos, curso){
       '<td><input type="number" class="nota-input" min="0" max="20" step="0.5" value="'+d.notas.trabajo+'" data-action="set-nota" data-campo="trabajoFinal" data-dni="'+d.alumno.dni+'" '+dis+'></td>' +
       '<td><input type="number" class="nota-input" min="0" max="20" step="0.5" value="'+d.notas.examen+'" data-action="set-nota" data-campo="examenFinal" data-dni="'+d.alumno.dni+'" '+dis+'></td>' +
       '<td><strong>'+d.notas.promedio.toFixed(1)+'</strong></td>' +
+      '<td>'+estado+'</td>' +
     '</tr>';
   }).join("");
 
   return top3Html +
-    '<p class="hint-text" style="margin-top:0">Nota de Participación: 1 punto por semana con asistencia, 2 por devocional y 3 por intercesión (máx. '+(TOTAL_SEMANAS*6)+' pts), convertidos a escala de 0 a 20. El Promedio Final es el promedio entre Participación, Trabajo Final y Examen Final.</p>' +
+    '<p class="hint-text" style="margin-top:0">Nota de Participación: 3 puntos por semana con asistencia, 1 por devocional y 1 por intercesión (máx. '+(TOTAL_SEMANAS*5)+' pts), convertidos a escala de 0 a 20. El Promedio Final es el promedio entre Participación, Trabajo Final y Examen Final. Se requiere un promedio mínimo de '+NOTA_MINIMA_APROBATORIA+' y tener calificados Trabajo Final y Examen Final para aprobar el curso.</p>' +
     (datos.length ?
-      '<div class="table-wrap"><table><thead><tr><th>Alumno</th><th>Asistencia</th><th>Devocional</th><th>Intercesión</th><th>Participación</th><th>Trabajo Final</th><th>Examen Final</th><th>Promedio Final</th></tr></thead><tbody>'+rows+'</tbody></table></div>'
+      '<div class="table-wrap"><table><thead><tr><th>Alumno</th><th>Asistencia</th><th>Devocional</th><th>Intercesión</th><th>Participación</th><th>Trabajo Final</th><th>Examen Final</th><th>Promedio Final</th><th>Estado</th></tr></thead><tbody>'+rows+'</tbody></table></div>'
       : '<div class="empty"><p>No hay alumnos inscritos en este curso.</p></div>');
 }
 
@@ -759,7 +769,13 @@ function renderAlumnoContent(user){
     '</tr>';
   }
   function badge(v){ return v ? '<span class="badge-ok">Sí</span>' : '<span class="badge-warn">Pendiente</span>'; }
-  function pct(n){ return Math.round((n/TOTAL_SEMANAS)*100); }
+
+  var notas = calcularNotaFinal(user.dni, cursoId);
+  var estadoHtml = notas.sinCalificar
+    ? '<span class="badge-muted" style="font-size:.85rem;padding:6px 14px">Trabajo Final y/o Examen Final pendientes de calificar</span>'
+    : (notas.aprobado
+        ? '<span class="badge-ok" style="font-size:.9rem;padding:6px 16px">Aprobado</span>'
+        : '<span class="badge-warn" style="font-size:.9rem;padding:6px 16px">Desaprobado</span>');
 
   host.innerHTML =
     '<div class="card">' +
@@ -770,21 +786,22 @@ function renderAlumnoContent(user){
         '<div class="stat"><div class="num">'+semanasDevo+'/'+TOTAL_SEMANAS+'</div><div class="lbl">Devocional</div></div>' +
         '<div class="stat"><div class="num">'+semanasInter+'/'+TOTAL_SEMANAS+'</div><div class="lbl">Intercesión</div></div>' +
       '</div>' +
-      progressRow("Asistencia global", pct(semanasAsis)) +
-      progressRow("Devocional global", pct(semanasDevo)) +
-      progressRow("Intercesión global", pct(semanasInter)) +
+    '</div>' +
+    '<div class="card">' +
+      '<h3 style="margin-top:0">Notas finales</h3>' +
+      '<div class="stat-row">' +
+        '<div class="stat"><div class="num">'+notas.notaParticipacion.toFixed(1)+'</div><div class="lbl">Participación</div></div>' +
+        '<div class="stat"><div class="num">'+notas.trabajo.toFixed(1)+'</div><div class="lbl">Trabajo Final</div></div>' +
+        '<div class="stat"><div class="num">'+notas.examen.toFixed(1)+'</div><div class="lbl">Examen Final</div></div>' +
+        '<div class="stat"><div class="num">'+notas.promedio.toFixed(1)+'</div><div class="lbl">Promedio Final</div></div>' +
+      '</div>' +
+      '<div style="text-align:center;margin-top:6px">'+estadoHtml+'</div>' +
+      '<p class="hint-text" style="text-align:center;margin-bottom:0">Nota mínima aprobatoria: '+NOTA_MINIMA_APROBATORIA+'/20</p>' +
     '</div>' +
     '<div class="card">' +
       '<h3>Avance semana a semana</h3>' +
       '<div class="table-wrap"><table><thead><tr><th>Semana</th><th>Asistencia</th><th>Devocional</th><th>Intercesión</th><th>Registrado</th></tr></thead><tbody>'+rowsHtml+'</tbody></table></div>' +
     '</div>';
-
-  function progressRow(label, p){
-    return '<div style="margin-bottom:12px">' +
-      '<div style="display:flex;justify-content:space-between;font-size:.82rem;color:var(--ink-soft);margin-bottom:5px"><span>'+label+'</span><span>'+p+'%</span></div>' +
-      '<div class="progress-bar"><div style="width:'+p+'%"></div></div>' +
-    '</div>';
-  }
 }
 
 // ---------------------------------------------------------------------
