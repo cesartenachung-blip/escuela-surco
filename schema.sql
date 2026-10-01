@@ -57,11 +57,15 @@ create table if not exists asistencia (
   semana      int not null check (semana between 1 and 9),
   asistio     boolean not null default false,
   devocional  boolean not null default false,
+  versiculo   boolean not null default false,
   intercesion boolean not null default false,
   fecha       timestamptz,
   updated_at  timestamptz not null default now(),
   unique (dni, curso_id, semana)
 );
+
+-- Migración idempotente para proyectos ya desplegados sin esta columna.
+alter table asistencia add column if not exists versiculo boolean not null default false;
 
 -- ---------------------------------------------------------------------------
 -- Row Level Security

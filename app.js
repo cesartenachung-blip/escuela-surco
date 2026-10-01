@@ -79,10 +79,10 @@ function rowToInscripcion(r){
   };
 }
 function rowToAsistencia(r){
-  return {id:r.id, dni:r.dni, cursoId:r.curso_id, semana:r.semana, asistio:r.asistio, devocional:r.devocional, intercesion:r.intercesion, fecha:r.fecha};
+  return {id:r.id, dni:r.dni, cursoId:r.curso_id, semana:r.semana, asistio:r.asistio, devocional:r.devocional, versiculo:!!r.versiculo, intercesion:r.intercesion, fecha:r.fecha};
 }
 function asistenciaToRow(a){
-  return {dni:a.dni, curso_id:a.cursoId, semana:a.semana, asistio:!!a.asistio, devocional:!!a.devocional, intercesion:!!a.intercesion, fecha:a.fecha||null};
+  return {dni:a.dni, curso_id:a.cursoId, semana:a.semana, asistio:!!a.asistio, devocional:!!a.devocional, versiculo:!!a.versiculo, intercesion:!!a.intercesion, fecha:a.fecha||null};
 }
 
 async function fetchAll(){
@@ -604,7 +604,7 @@ function renderMonitorTable(){
 
   var weekTabs = "";
   for(var w=1; w<=TOTAL_SEMANAS; w++){
-    var anyDone = todosInscritos.some(function(a){ var r=getAsistencia(a.dni,cursoId,w); return r && (r.asistio||r.devocional||r.intercesion); });
+    var anyDone = todosInscritos.some(function(a){ var r=getAsistencia(a.dni,cursoId,w); return r && (r.asistio||r.devocional||r.versiculo||r.intercesion); });
     weekTabs += '<button class="week-tab '+(semana===w?"active":"")+' '+(anyDone?"done":"")+'" data-action="set-semana" data-semana="'+w+'">Semana '+w+'</button>';
   }
   weekTabs += '<button class="week-tab '+(semana==="final"?"active":"")+'" data-action="set-semana" data-semana="final">Promedio Final</button>';
@@ -626,12 +626,13 @@ function renderMonitorTable(){
 
 function renderSemanaHtml(cursoId, alumnos, todosInscritos, semana, curso, q){
   var rows = alumnos.map(function(a){
-    var r = getAsistencia(a.dni, cursoId, semana) || {asistio:false, devocional:false, intercesion:false, fecha:null};
+    var r = getAsistencia(a.dni, cursoId, semana) || {asistio:false, devocional:false, versiculo:false, intercesion:false, fecha:null};
     var dis = curso.bloqueado ? "disabled" : "";
     return '<tr>' +
       '<td><strong>'+escapeHtml(a.apellido+" "+a.nombre)+'</strong><br><span style="color:var(--ink-soft);font-size:.78rem">DNI '+escapeHtml(a.dni)+'</span></td>' +
       '<td class="chk-cell"><input type="checkbox" class="chk" data-action="toggle" data-dni="'+a.dni+'" data-campo="asistio" '+(r.asistio?"checked":"")+' '+dis+'></td>' +
       '<td class="chk-cell"><input type="checkbox" class="chk" data-action="toggle" data-dni="'+a.dni+'" data-campo="devocional" '+(r.devocional?"checked":"")+' '+dis+'></td>' +
+      '<td class="chk-cell"><input type="checkbox" class="chk" data-action="toggle" data-dni="'+a.dni+'" data-campo="versiculo" '+(r.versiculo?"checked":"")+' '+dis+'></td>' +
       '<td class="chk-cell"><input type="checkbox" class="chk" data-action="toggle" data-dni="'+a.dni+'" data-campo="intercesion" '+(r.intercesion?"checked":"")+' '+dis+'></td>' +
       '<td style="font-size:.78rem;color:var(--ink-soft)">'+(r.fecha?fmtDate(r.fecha):'&mdash;')+'</td>' +
       '<td><button class="btn small danger" data-action="reset-semana" data-dni="'+a.dni+'" '+dis+'>Restablecer</button></td>' +
@@ -641,16 +642,18 @@ function renderSemanaHtml(cursoId, alumnos, todosInscritos, semana, curso, q){
   var totalInscritos = todosInscritos.length;
   var presentesSemana = todosInscritos.filter(function(a){ var r=getAsistencia(a.dni,cursoId,semana); return r && r.asistio; }).length;
   var devocionalSemana = todosInscritos.filter(function(a){ var r=getAsistencia(a.dni,cursoId,semana); return r && r.devocional; }).length;
+  var versiculoSemana = todosInscritos.filter(function(a){ var r=getAsistencia(a.dni,cursoId,semana); return r && r.versiculo; }).length;
   var intercesionSemana = todosInscritos.filter(function(a){ var r=getAsistencia(a.dni,cursoId,semana); return r && r.intercesion; }).length;
 
   return '<div class="stat-row compact">' +
       '<div class="stat"><div class="num">'+totalInscritos+'</div><div class="lbl">Inscritos</div></div>' +
       '<div class="stat"><div class="num">'+presentesSemana+'</div><div class="lbl">Presentes semana '+semana+'</div></div>' +
       '<div class="stat"><div class="num">'+devocionalSemana+'</div><div class="lbl">Devocional semana '+semana+'</div></div>' +
+      '<div class="stat"><div class="num">'+versiculoSemana+'</div><div class="lbl">Versículo semana '+semana+'</div></div>' +
       '<div class="stat"><div class="num">'+intercesionSemana+'</div><div class="lbl">Intercesión semana '+semana+'</div></div>' +
     '</div>' +
     (alumnos.length ?
-      '<div class="table-wrap"><table><thead><tr><th>Alumno</th><th>Asistencia</th><th>Devocional</th><th>Intercesión</th><th>Registrado</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'
+      '<div class="table-wrap"><table><thead><tr><th>Alumno</th><th>Asistencia</th><th>Devocional</th><th>Versículo</th><th>Intercesión</th><th>Registrado</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'
       : '<div class="empty"><p>No se encontraron alumnos inscritos'+(q?" con ese criterio":"")+'.</p></div>');
 }
 
