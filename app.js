@@ -8,7 +8,10 @@
 
 var SESSION_KEY = "edl_aguaviva_session_v1"; // solo guarda la sesión de ESTE dispositivo
 var TOTAL_SEMANAS = 9;
-var NOTA_MINIMA_APROBATORIA = 14;
+var NOTA_MINIMA_APROBATORIA = 13;      // NOTA ESCUELA mínima
+var NOTA_MINIMA_TRABAJO_EXAMEN = 13;   // mínimo en Trabajo Final y Examen Final
+var MIN_CLASES_APROBAR = 6;            // clases a las que hay que asistir como mínimo
+var PUNTOS_POR_SEMANA = 2.222;         // valor de cada semana en asistencia/devocional/versículo/intercesión
 var QR_PREFIX = "AGUAVIVA-EDL:";
 
 // ---------------------------------------------------------------------
@@ -69,8 +72,17 @@ function $(sel, ctx){ return (ctx||document).querySelector(sel); }
 var db = { usuarios:[], trimestres:[], cursos:[], inscripciones:[], asistencia:[] };
 
 // Mapeo snake_case (Postgres) <-> camelCase (usado por las vistas)
-function rowToCurso(r){ return {id:r.id, nombre:r.nombre, trimestreId:r.trimestre_id, monitorDni:r.monitor_dni, bloqueado: !!r.bloqueado}; }
-function cursoToRow(c){ return {nombre:c.nombre, trimestre_id:c.trimestreId, monitor_dni:c.monitorDni||null, bloqueado: !!c.bloqueado}; }
+var MAX_MONITORES_CURSO = 4;
+function rowToCurso(r){
+  var lista = (Array.isArray(r.monitores) && r.monitores.length) ? r.monitores.slice() : (r.monitor_dni ? [r.monitor_dni] : []);
+  return {id:r.id, nombre:r.nombre, trimestreId:r.trimestre_id, monitoresDni:lista, bloqueado: !!r.bloqueado};
+}
+function cursoToRow(c){
+  var lista = (c.monitoresDni || []).filter(Boolean);
+  return {nombre:c.nombre, trimestre_id:c.trimestreId, monitores:lista, monitor_dni:lista[0]||null, bloqueado: !!c.bloqueado};
+}
+function monitoresDeCurso(c){ return (c && c.monitoresDni) ? c.monitoresDni : []; }
+function esMonitorDe(c, dni){ return monitoresDeCurso(c).indexOf(dni) > -1; }
 function rowToInscripcion(r){
   return {
     id:r.id, dni:r.dni, cursoId:r.curso_id,
@@ -100,7 +112,7 @@ async function fetchAll(){
   }
   db.usuarios = res[0].data || [];
   db.trimestres = res[1].data || [];
-  db.cursos = (res[2].data || []).map(rowToCurso);
+  db.cursos = (res[2].data || []).map(rowToCurso).sort(function(a,b){ return a.nombre.localeCompare(b.nombre, "es", {sensitivity:"base", numeric:true}); });
   db.inscripciones = (res[3].data || []).map(rowToInscripcion);
   db.asistencia = (res[4].data || []).map(rowToAsistencia);
   return true;
@@ -144,7 +156,7 @@ function cursosDeAlumno(dni){
   var ids = db.inscripciones.filter(function(i){ return i.dni === dni; }).map(function(i){ return i.cursoId; });
   return db.cursos.filter(function(c){ return ids.indexOf(c.id) > -1; });
 }
-function cursosDeMonitor(dni){ return db.cursos.filter(function(c){ return c.monitorDni === dni; }); }
+function cursosDeMonitor(dni){ return db.cursos.filter(function(c){ return esMonitorDe(c, dni); }); }
 function getAsistencia(dni, cursoId, semana){
   return db.asistencia.find(function(a){ return a.dni===dni && a.cursoId===cursoId && a.semana===semana; });
 }
@@ -184,7 +196,7 @@ function currentUser(){ return session.dni ? findUsuario(session.dni) : null; }
 function vistasDisponibles(user){
   if(!user) return [];
   if(user.rol === "admin") return ["admin"];
-  var esMonitor = user.rol === "monitor" || db.cursos.some(function(c){ return c.monitorDni === user.dni; });
+  var esMonitor = user.rol === "monitor" || db.cursos.some(function(c){ return esMonitorDe(c, user.dni); });
   var esAlumno = user.rol === "estudiante" || db.inscripciones.some(function(i){ return i.dni === user.dni; });
   var vistas = [];
   if(esMonitor) vistas.push("monitor");
@@ -553,38 +565,44 @@ function renderMonitorView(user){
 // ---------------------------------------------------------------------
 // Cálculo de notas finales (asistencia 1pt, devocional 2pts, intercesión 3pts)
 // ---------------------------------------------------------------------
+function redondear2(n){ return Math.round(n*100)/100; }
 function calcularTotalesSemanas(dni, cursoId){
-  var totalAsis=0, totalDevo=0, totalInter=0;
+  var totalAsis=0, totalDevo=0, totalVers=0, totalInter=0;
   for(var w=1; w<=TOTAL_SEMANAS; w++){
     var r = getAsistencia(dni, cursoId, w);
     if(r && r.asistio) totalAsis++;
     if(r && r.devocional) totalDevo++;
+    if(r && r.versiculo) totalVers++;
     if(r && r.intercesion) totalInter++;
   }
-  return {totalAsis:totalAsis, totalDevo:totalDevo, totalInter:totalInter};
+  return {totalAsis:totalAsis, totalDevo:totalDevo, totalVers:totalVers, totalInter:totalInter};
 }
+// Cada componente (asistencia, devocional, versículo, intercesión) vale 2.222 por semana (máx. ~20).
+// NOTA ESCUELA = promedio(asistencia, trabajo final, examen final).
+// PROMEDIO FINAL = promedio(asistencia, devocional, versículo, intercesión, trabajo final, examen final).
 function calcularNotaFinal(dni, cursoId){
   var t = calcularTotalesSemanas(dni, cursoId);
-  var ptsAsis = t.totalAsis*3, ptsDevo = t.totalDevo*1, ptsInter = t.totalInter*1;
-  var puntos = ptsAsis + ptsDevo + ptsInter;
-  var maxPuntos = TOTAL_SEMANAS*(3+1+1); // 45 con 9 semanas
-  var notaParticipacion = maxPuntos>0 ? (puntos/maxPuntos)*20 : 0;
+  var notaAsis = redondear2(t.totalAsis*PUNTOS_POR_SEMANA);
+  var notaDevo = redondear2(t.totalDevo*PUNTOS_POR_SEMANA);
+  var notaVers = redondear2(t.totalVers*PUNTOS_POR_SEMANA);
+  var notaInter = redondear2(t.totalInter*PUNTOS_POR_SEMANA);
   var insc = db.inscripciones.find(function(i){ return i.dni===dni && i.cursoId===cursoId; });
   var trabajo = insc ? Number(insc.trabajoFinal||0) : 0;
   var examen = insc ? Number(insc.examenFinal||0) : 0;
-  var promedio = (notaParticipacion + trabajo + examen) / 3;
-  // Si el monitor aún no calificó Trabajo Final y/o Examen Final (valor 0 = sin calificar),
-  // el curso se considera desaprobado sin importar el promedio.
+  var notaEscuela = redondear2((notaAsis + trabajo + examen) / 3);
+  var promedio = redondear2((notaAsis + notaDevo + notaVers + notaInter + trabajo + examen) / 6);
+  // Valor 0 en Trabajo/Examen = sin calificar.
   var sinCalificar = trabajo <= 0 || examen <= 0;
-  var aprobado = !sinCalificar && promedio >= NOTA_MINIMA_APROBATORIA;
+  var cumpleAsistencia = t.totalAsis >= MIN_CLASES_APROBAR;
+  var cumpleMinimos = trabajo >= NOTA_MINIMA_TRABAJO_EXAMEN && examen >= NOTA_MINIMA_TRABAJO_EXAMEN;
+  var aprobado = !sinCalificar && cumpleAsistencia && cumpleMinimos && notaEscuela >= NOTA_MINIMA_APROBATORIA;
   return {
-    totalAsis:t.totalAsis, totalDevo:t.totalDevo, totalInter:t.totalInter,
-    ptsAsis:ptsAsis, ptsDevo:ptsDevo, ptsInter:ptsInter,
-    notaParticipacion:notaParticipacion, trabajo:trabajo, examen:examen, promedio:promedio,
+    totalAsis:t.totalAsis, totalDevo:t.totalDevo, totalVers:t.totalVers, totalInter:t.totalInter,
+    notaAsis:notaAsis, notaDevo:notaDevo, notaVers:notaVers, notaInter:notaInter,
+    notaEscuela:notaEscuela, trabajo:trabajo, examen:examen, promedio:promedio,
     sinCalificar:sinCalificar, aprobado:aprobado
   };
 }
-
 
 function renderMonitorTable(){
   var host = document.getElementById("monitor-content");
@@ -668,7 +686,7 @@ function renderPromedioFinalHtml(cursoId, todosInscritos, curso){
       '<h3 style="margin-top:0">Top 3 del curso — Reconocimiento</h3>' +
       '<div class="stat-row compact">' +
         top3.map(function(d,i){
-          return '<div class="stat"><div class="num">'+medallas[i]+'</div><div class="lbl">'+escapeHtml(d.alumno.nombre+" "+d.alumno.apellido)+'<br>'+d.notas.promedio.toFixed(1)+' / 20</div></div>';
+          return '<div class="stat"><div class="num">'+medallas[i]+'</div><div class="lbl">'+escapeHtml(d.alumno.nombre+" "+d.alumno.apellido)+'<br>'+d.notas.promedio.toFixed(2)+' / 20</div></div>';
         }).join("") +
       '</div>' +
     '</div>' : '';
@@ -678,23 +696,25 @@ function renderPromedioFinalHtml(cursoId, todosInscritos, curso){
     var estado = d.notas.sinCalificar
       ? '<span class="badge-muted">Falta calificar</span>'
       : (d.notas.aprobado ? '<span class="badge-ok">Aprobado</span>' : '<span class="badge-warn">Desaprobado</span>');
+    function celda(nota, cant){ return '<td>'+nota.toFixed(2)+' <span style="color:var(--ink-soft);font-size:.72rem">('+cant+')</span></td>'; }
     return '<tr>' +
       '<td><strong>'+escapeHtml(d.alumno.apellido+" "+d.alumno.nombre)+'</strong></td>' +
-      '<td>'+d.notas.ptsAsis+' pts</td>' +
-      '<td>'+d.notas.ptsDevo+' pts</td>' +
-      '<td>'+d.notas.ptsInter+' pts</td>' +
-      '<td>'+d.notas.notaParticipacion.toFixed(1)+'</td>' +
+      celda(d.notas.notaAsis, d.notas.totalAsis) +
+      celda(d.notas.notaDevo, d.notas.totalDevo) +
+      celda(d.notas.notaVers, d.notas.totalVers) +
+      celda(d.notas.notaInter, d.notas.totalInter) +
+      '<td><strong>'+d.notas.notaEscuela.toFixed(2)+'</strong></td>' +
       '<td><input type="number" class="nota-input" min="0" max="20" step="0.5" value="'+d.notas.trabajo+'" data-action="set-nota" data-campo="trabajoFinal" data-dni="'+d.alumno.dni+'" '+dis+'></td>' +
       '<td><input type="number" class="nota-input" min="0" max="20" step="0.5" value="'+d.notas.examen+'" data-action="set-nota" data-campo="examenFinal" data-dni="'+d.alumno.dni+'" '+dis+'></td>' +
-      '<td><strong>'+d.notas.promedio.toFixed(1)+'</strong></td>' +
+      '<td><strong>'+d.notas.promedio.toFixed(2)+'</strong></td>' +
       '<td>'+estado+'</td>' +
     '</tr>';
   }).join("");
 
   return top3Html +
-    '<p class="hint-text" style="margin-top:0">Nota de Participación: 3 puntos por semana con asistencia, 1 por devocional y 1 por intercesión (máx. '+(TOTAL_SEMANAS*5)+' pts), convertidos a escala de 0 a 20. El Promedio Final es el promedio entre Participación, Trabajo Final y Examen Final. Se requiere un promedio mínimo de '+NOTA_MINIMA_APROBATORIA+' y tener calificados Trabajo Final y Examen Final para aprobar el curso.</p>' +
+    '<p class="hint-text" style="margin-top:0">Asistencia, Devocional, Versículo e Intercesión: cada semana vale '+PUNTOS_POR_SEMANA+' (entre paréntesis, semanas cumplidas). <b>Nota Escuela</b> = promedio de Asistencia, Trabajo Final y Examen Final. <b>Promedio Final</b> = promedio de Asistencia, Devocional, Versículo, Intercesión, Trabajo Final y Examen Final. Para aprobar: asistir a mínimo '+MIN_CLASES_APROBAR+' clases, tener mínimo '+NOTA_MINIMA_TRABAJO_EXAMEN+' en Trabajo Final y Examen Final, y Nota Escuela de '+NOTA_MINIMA_APROBATORIA+' o más. El Top 3 se calcula con el Promedio Final.</p>' +
     (datos.length ?
-      '<div class="table-wrap"><table><thead><tr><th>Alumno</th><th>Asistencia</th><th>Devocional</th><th>Intercesión</th><th>Participación</th><th>Trabajo Final</th><th>Examen Final</th><th>Promedio Final</th><th>Estado</th></tr></thead><tbody>'+rows+'</tbody></table></div>'
+      '<div class="table-wrap"><table><thead><tr><th>Alumno</th><th>Asistencia</th><th>Devocional</th><th>Versículo</th><th>Intercesión</th><th>Nota Escuela</th><th>Trabajo Final</th><th>Examen Final</th><th>Promedio Final</th><th>Estado</th></tr></thead><tbody>'+rows+'</tbody></table></div>'
       : '<div class="empty"><p>No hay alumnos inscritos en este curso.</p></div>');
 }
 
@@ -751,22 +771,25 @@ function renderAlumnoContent(user){
     return;
   }
   var curso = findCurso(cursoId);
-  var monitor = findUsuario(curso.monitorDni);
+  var monitoresTxt = monitoresDeCurso(curso).map(function(d){ var m=findUsuario(d); return m ? m.nombre+" "+m.apellido : ""; }).filter(Boolean).join(", ");
 
-  var semanasAsis=0, semanasDevo=0, semanasInter=0;
+  var semanasAsis=0, semanasDevo=0, semanasVers=0, semanasInter=0;
   var rowsHtml = "";
   for(var w=1; w<=TOTAL_SEMANAS; w++){
     var r = getAsistencia(user.dni, cursoId, w);
     var asis = r ? r.asistio : false;
     var devo = r ? r.devocional : false;
+    var vers = r ? !!r.versiculo : false;
     var inter = r ? r.intercesion : false;
     if(asis) semanasAsis++;
     if(devo) semanasDevo++;
+    if(vers) semanasVers++;
     if(inter) semanasInter++;
     rowsHtml += '<tr>' +
       '<td><strong>Semana '+w+'</strong></td>' +
       '<td>'+badge(asis)+'</td>' +
       '<td>'+badge(devo)+'</td>' +
+      '<td>'+badge(vers)+'</td>' +
       '<td>'+badge(inter)+'</td>' +
       '<td style="font-size:.78rem;color:var(--ink-soft)">'+(r&&r.fecha?fmtDate(r.fecha):'&mdash;')+'</td>' +
     '</tr>';
@@ -783,27 +806,27 @@ function renderAlumnoContent(user){
   host.innerHTML =
     '<div class="card">' +
       '<h2>'+escapeHtml(curso.nombre)+'</h2>' +
-      '<p style="margin-top:-6px;color:var(--ink-soft);font-size:.88rem">Monitor: '+escapeHtml(monitor?monitor.nombre+" "+monitor.apellido:"—")+'</p>' +
+      '<p style="margin-top:-6px;color:var(--ink-soft);font-size:.88rem">Monitor(es): '+escapeHtml(monitoresTxt||"—")+'</p>' +
       '<div class="stat-row">' +
         '<div class="stat"><div class="num">'+semanasAsis+'/'+TOTAL_SEMANAS+'</div><div class="lbl">Asistencia</div></div>' +
         '<div class="stat"><div class="num">'+semanasDevo+'/'+TOTAL_SEMANAS+'</div><div class="lbl">Devocional</div></div>' +
+        '<div class="stat"><div class="num">'+semanasVers+'/'+TOTAL_SEMANAS+'</div><div class="lbl">Versículo</div></div>' +
         '<div class="stat"><div class="num">'+semanasInter+'/'+TOTAL_SEMANAS+'</div><div class="lbl">Intercesión</div></div>' +
       '</div>' +
     '</div>' +
     '<div class="card">' +
       '<h3 style="margin-top:0">Notas finales</h3>' +
       '<div class="stat-row">' +
-        '<div class="stat"><div class="num">'+notas.notaParticipacion.toFixed(1)+'</div><div class="lbl">Participación</div></div>' +
         '<div class="stat"><div class="num">'+notas.trabajo.toFixed(1)+'</div><div class="lbl">Trabajo Final</div></div>' +
         '<div class="stat"><div class="num">'+notas.examen.toFixed(1)+'</div><div class="lbl">Examen Final</div></div>' +
-        '<div class="stat"><div class="num">'+notas.promedio.toFixed(1)+'</div><div class="lbl">Promedio Final</div></div>' +
+        '<div class="stat"><div class="num">'+notas.promedio.toFixed(2)+'</div><div class="lbl">Promedio Final</div></div>' +
       '</div>' +
       '<div style="text-align:center;margin-top:6px">'+estadoHtml+'</div>' +
-      '<p class="hint-text" style="text-align:center;margin-bottom:0">Nota mínima aprobatoria: '+NOTA_MINIMA_APROBATORIA+'/20</p>' +
+      '<p class="hint-text" style="text-align:center;margin-bottom:0">Para aprobar: asistir a mínimo '+MIN_CLASES_APROBAR+' clases y obtener mínimo '+NOTA_MINIMA_TRABAJO_EXAMEN+' en Trabajo Final y Examen Final.</p>' +
     '</div>' +
     '<div class="card">' +
       '<h3>Avance semana a semana</h3>' +
-      '<div class="table-wrap"><table><thead><tr><th>Semana</th><th>Asistencia</th><th>Devocional</th><th>Intercesión</th><th>Registrado</th></tr></thead><tbody>'+rowsHtml+'</tbody></table></div>' +
+      '<div class="table-wrap"><table><thead><tr><th>Semana</th><th>Asistencia</th><th>Devocional</th><th>Versículo</th><th>Intercesión</th><th>Registrado</th></tr></thead><tbody>'+rowsHtml+'</tbody></table></div>' +
     '</div>';
 }
 
@@ -816,6 +839,7 @@ var adminViewState = {
   filtroAlumnosTrimestre:"",
   filtroAlumnosCurso:"",
   filtroAlumnosBuscar:"",
+  filtroMonitoresBuscar:"",
   filtroMonitoresTrimestre:"",
   masivoInscTrimestre:""
 };
@@ -859,13 +883,13 @@ function renderAdminCursos(host){
 
   var rows = cursosFiltrados.map(function(c){
     var t = findTrimestre(c.trimestreId);
-    var m = findUsuario(c.monitorDni);
+    var monsTxt = monitoresDeCurso(c).map(function(d){ var m=findUsuario(d); return m ? m.nombre+" "+m.apellido : ""; }).filter(Boolean).join(", ");
     var n = inscritosDeCurso(c.id).length;
     var badgeBloqueo = c.bloqueado ? ' <span class="badge-warn">Bloqueado</span>' : '';
     return '<tr>' +
       '<td><strong>'+escapeHtml(c.nombre)+'</strong>'+badgeBloqueo+'</td>' +
       '<td>'+escapeHtml(t?t.nombre:"—")+'</td>' +
-      '<td>'+escapeHtml(m?m.nombre+" "+m.apellido:"Sin asignar")+'</td>' +
+      '<td>'+escapeHtml(monsTxt||"Sin asignar")+'</td>' +
       '<td>'+n+'</td>' +
       '<td class="btn-row">' +
         '<button class="btn small secondary" data-action="edit-curso" data-id="'+c.id+'">Editar</button>' +
@@ -921,7 +945,7 @@ function renderAdminPersonas(host, rol){
   var filtrosHtml = '<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end">' +
     '<div class="field"><label>Trimestre</label><select id="filtro-personas-trimestre">'+opcionesTrimestre+'</select></div>' +
     (esAlumno ? '<div class="field"><label>Curso</label><select id="filtro-personas-curso">'+opcionesCurso+'</select></div>' : '') +
-    (esAlumno ? '<div class="field"><label>Buscar alumno</label><input type="text" id="filtro-personas-buscar" placeholder="Nombre o apellido..." value="'+escapeHtml(adminViewState.filtroAlumnosBuscar)+'"></div>' : '') +
+    '<div class="field"><label>Buscar '+(esAlumno?"alumno":"monitor")+'</label><input type="text" id="filtro-personas-buscar" placeholder="Nombre o apellido..." value="'+escapeHtml(esAlumno ? adminViewState.filtroAlumnosBuscar : adminViewState.filtroMonitoresBuscar)+'"></div>' +
   '</div>';
 
   host.innerHTML =
@@ -950,7 +974,8 @@ function renderAdminPersonas(host, rol){
   });
   var inpBuscar = document.getElementById("filtro-personas-buscar");
   if(inpBuscar) inpBuscar.addEventListener("input", function(e){
-    adminViewState.filtroAlumnosBuscar = e.target.value;
+    if(esAlumno) adminViewState.filtroAlumnosBuscar = e.target.value;
+    else adminViewState.filtroMonitoresBuscar = e.target.value;
     renderAdminPersonasContent(rol);
   });
 
@@ -962,7 +987,7 @@ function renderAdminPersonasContent(rol){
   var esAlumno = rol==="estudiante";
   var filtroTrimestre = esAlumno ? adminViewState.filtroAlumnosTrimestre : adminViewState.filtroMonitoresTrimestre;
   var filtroCurso = esAlumno ? adminViewState.filtroAlumnosCurso : "";
-  var textoBusqueda = esAlumno ? normalize(adminViewState.filtroAlumnosBuscar) : "";
+  var textoBusqueda = normalize(esAlumno ? adminViewState.filtroAlumnosBuscar : adminViewState.filtroMonitoresBuscar);
 
   // Una persona aparece en esta lista si su rol base coincide, O si además de su rol
   // base tiene inscripciones (como alumno) o cursos asignados (como monitor) — esto
@@ -1196,36 +1221,108 @@ function renderAdminMasivo(host){
 }
 
 // ---- Modales de administración ----
+// Monitores que aún no están asignados a OTRO curso del mismo trimestre.
+function monitoresDisponibles(trimestreId, cursoIdActual){
+  var usados = {};
+  db.cursos.forEach(function(c){
+    if(c.trimestreId === trimestreId && c.id !== cursoIdActual){
+      monitoresDeCurso(c).forEach(function(d){ usados[d] = true; });
+    }
+  });
+  return db.usuarios.filter(function(u){ return u.rol !== "admin" && !usados[u.dni]; })
+    .sort(function(a,b){ return (a.apellido+a.nombre).localeCompare(b.apellido+b.nombre); });
+}
+function htmlSelectoresMonitor(trimestreId, cursoIdActual, seleccionados){
+  var disponibles = monitoresDisponibles(trimestreId, cursoIdActual);
+  var html = "";
+  for(var i=0; i<MAX_MONITORES_CURSO; i++){
+    var propio = seleccionados[i] || "";
+    var otros = seleccionados.filter(function(d, j){ return j !== i && d; });
+    var ops = '<option value="">Sin asignar</option>' + disponibles.filter(function(u){ return otros.indexOf(u.dni) === -1; }).map(function(m){
+      return '<option value="'+m.dni+'" '+(m.dni===propio?"selected":"")+'>'+escapeHtml(m.apellido+" "+m.nombre)+'</option>';
+    }).join("");
+    html += '<div class="field" style="margin-bottom:10px"><label>Monitor '+(i+1)+'</label><select class="f-curso-monitor-sel">'+ops+'</select></div>';
+  }
+  return html;
+}
+function refrescarSelectoresMonitor(cursoIdActual){
+  var trimestreId = document.getElementById("f-curso-trimestre").value;
+  var disponibles = monitoresDisponibles(trimestreId, cursoIdActual).map(function(u){ return u.dni; });
+  var actuales = Array.prototype.slice.call(document.querySelectorAll(".f-curso-monitor-sel")).map(function(sel){ return sel.value; });
+  // se descartan los que ya no están disponibles en el trimestre elegido
+  actuales = actuales.map(function(d){ return disponibles.indexOf(d) > -1 ? d : ""; });
+  document.getElementById("f-curso-monitores").innerHTML = htmlSelectoresMonitor(trimestreId, cursoIdActual, actuales);
+}
+
 function openCursoModal(cursoId){
   var curso = cursoId ? findCurso(cursoId) : null;
+  var trimestreInicial = curso ? curso.trimestreId : (db.trimestres[0] ? db.trimestres[0].id : "");
   var opcionesTrimestres = db.trimestres.map(function(t){
-    return '<option value="'+t.id+'" '+(curso&&curso.trimestreId===t.id?"selected":"")+'>'+escapeHtml(t.nombre)+'</option>';
+    return '<option value="'+t.id+'" '+(t.id===trimestreInicial?"selected":"")+'>'+escapeHtml(t.nombre)+'</option>';
   }).join("");
-  var opcionesMonitores = '<option value="">Sin asignar</option>' + db.usuarios.filter(function(u){return u.rol!=="admin";}).sort(function(a,b){ return (a.apellido+a.nombre).localeCompare(b.apellido+b.nombre); }).map(function(m){
-    return '<option value="'+m.dni+'" '+(curso&&curso.monitorDni===m.dni?"selected":"")+'>'+escapeHtml(m.nombre+" "+m.apellido)+'</option>';
-  }).join("");
+  var seleccionados = curso ? monitoresDeCurso(curso).slice(0, MAX_MONITORES_CURSO) : [];
   var html = modalShell(
     curso ? "Editar curso" : "Nuevo curso",
     '<div class="field" style="margin-bottom:14px"><label>Nombre del curso</label><input type="text" id="f-curso-nombre" value="'+escapeHtml(curso?curso.nombre:"")+'"></div>' +
     '<div class="field" style="margin-bottom:14px"><label>Trimestre</label><select id="f-curso-trimestre">'+opcionesTrimestres+'</select></div>' +
-    '<div class="field"><label>Monitor asignado</label><select id="f-curso-monitor">'+opcionesMonitores+'</select></div>',
+    '<p class="hint-text" style="margin:0 0 10px">Hasta '+MAX_MONITORES_CURSO+' monitores por curso. Un monitor no puede estar en dos cursos del mismo trimestre.</p>' +
+    '<div id="f-curso-monitores">'+htmlSelectoresMonitor(trimestreInicial, curso?curso.id:null, seleccionados)+'</div>',
     '<button class="btn secondary" data-action="close-modal">Cancelar</button>' +
     '<button class="btn" data-action="save-curso" data-id="'+(curso?curso.id:"")+'">Guardar</button>'
   );
   openModal(html);
+  var idActual = curso ? curso.id : null;
+  document.getElementById("f-curso-trimestre").addEventListener("change", function(){ refrescarSelectoresMonitor(idActual); });
+  document.getElementById("f-curso-monitores").addEventListener("change", function(){ refrescarSelectoresMonitor(idActual); });
 }
+
+// ---- Inscripción de un alumno dentro del modal Editar/Nuevo alumno ----
+function cursoInscritoEnTrimestre(dni, trimestreId){
+  var c = cursosDeAlumno(dni).filter(function(x){ return x.trimestreId === trimestreId; })[0];
+  return c ? c.id : "";
+}
+function htmlOpcionesCursoAlumno(trimestreId, seleccionado){
+  return '<option value="">Sin curso</option>' + cursosDeTrimestre(trimestreId).map(function(c){
+    return '<option value="'+c.id+'" '+(c.id===seleccionado?"selected":"")+'>'+escapeHtml(c.nombre)+'</option>';
+  }).join("");
+}
+
 function openPersonaModal(dni, rol){
   var persona = dni ? findUsuario(dni) : null;
+  var esAlu = rol === "estudiante";
+  var extra = "";
+  var trimInicial = "";
+  if(esAlu){
+    trimInicial = adminViewState.filtroAlumnosTrimestre || "";
+    if(!trimInicial && persona){
+      var cs = cursosDeAlumno(persona.dni);
+      if(cs.length) trimInicial = cs[0].trimestreId;
+    }
+    if(!trimInicial && db.trimestres[0]) trimInicial = db.trimestres[0].id;
+    var cursoActual = persona ? cursoInscritoEnTrimestre(persona.dni, trimInicial) : "";
+    var opTrim = db.trimestres.map(function(t){
+      return '<option value="'+t.id+'" '+(t.id===trimInicial?"selected":"")+'>'+escapeHtml(t.nombre)+'</option>';
+    }).join("");
+    extra =
+      '<div class="field" style="margin-top:14px"><label>Trimestre</label><select id="f-p-trimestre">'+opTrim+'</select></div>' +
+      '<div class="field" style="margin-top:14px"><label>Curso inscrito</label><select id="f-p-curso">'+htmlOpcionesCursoAlumno(trimInicial, cursoActual)+'</select></div>';
+  }
   var html = modalShell(
-    persona ? "Editar " + (rol==="estudiante"?"alumno":"monitor") : "Nuevo " + (rol==="estudiante"?"alumno":"monitor"),
+    persona ? "Editar " + (esAlu?"alumno":"monitor") : "Nuevo " + (esAlu?"alumno":"monitor"),
     '<div class="field" style="margin-bottom:14px"><label>Nombres</label><input type="text" id="f-p-nombre" value="'+escapeHtml(persona?persona.nombre:"")+'"></div>' +
     '<div class="field" style="margin-bottom:14px"><label>Apellidos</label><input type="text" id="f-p-apellido" value="'+escapeHtml(persona?persona.apellido:"")+'"></div>' +
     '<div class="field" style="margin-bottom:14px"><label>DNI (usuario de ingreso)</label><input type="text" id="f-p-dni" value="'+escapeHtml(persona?persona.dni:"")+'" '+(persona?"disabled":"")+'></div>' +
-    '<div class="field"><label>Celular (clave de ingreso)</label><input type="text" id="f-p-celular" value="'+escapeHtml(persona?persona.celular:"")+'"></div>',
+    '<div class="field"><label>Celular (clave de ingreso)</label><input type="text" id="f-p-celular" value="'+escapeHtml(persona?persona.celular:"")+'"></div>' + extra,
     '<button class="btn secondary" data-action="close-modal">Cancelar</button>' +
     '<button class="btn" data-action="save-persona" data-dni="'+(persona?persona.dni:"")+'" data-rol="'+rol+'">Guardar</button>'
   );
   openModal(html);
+  if(esAlu){
+    document.getElementById("f-p-trimestre").addEventListener("change", function(e){
+      var actual = persona ? cursoInscritoEnTrimestre(persona.dni, e.target.value) : "";
+      document.getElementById("f-p-curso").innerHTML = htmlOpcionesCursoAlumno(e.target.value, actual);
+    });
+  }
 }
 function openInscribirModal(dni){
   var user = findUsuario(dni);
@@ -1384,11 +1481,17 @@ document.addEventListener("click", async function(e){
       case "save-curso": {
         var nombre = document.getElementById("f-curso-nombre").value.trim();
         var trimestreId = document.getElementById("f-curso-trimestre").value;
-        var monitorDni = document.getElementById("f-curso-monitor").value;
+        var monitoresSel = Array.prototype.slice.call(document.querySelectorAll(".f-curso-monitor-sel")).map(function(sel){ return sel.value; }).filter(Boolean);
         if(!nombre){ toast("Ingrese el nombre del curso.", "err"); break; }
         var id = el.getAttribute("data-id");
+        if(monitoresSel.length > MAX_MONITORES_CURSO){ toast("Máximo "+MAX_MONITORES_CURSO+" monitores por curso.", "err"); break; }
+        if(monitoresSel.some(function(d,i){ return monitoresSel.indexOf(d) !== i; })){ toast("No repita el mismo monitor en un curso.", "err"); break; }
+        var ocupados = {};
+        db.cursos.forEach(function(c){ if(c.trimestreId===trimestreId && c.id!==id) monitoresDeCurso(c).forEach(function(d){ ocupados[d]=c.nombre; }); });
+        var repetido = monitoresSel.filter(function(d){ return ocupados[d]; })[0];
+        if(repetido){ var mr = findUsuario(repetido); toast((mr?mr.nombre+" "+mr.apellido:"El monitor")+" ya está en el curso "+ocupados[repetido]+" de este trimestre.", "err"); break; }
         var cursoExistente = id ? findCurso(id) : null;
-        var row = cursoToRow({nombre:nombre, trimestreId:trimestreId, monitorDni:monitorDni||null, bloqueado: cursoExistente ? cursoExistente.bloqueado : false});
+        var row = cursoToRow({nombre:nombre, trimestreId:trimestreId, monitoresDni:monitoresSel, bloqueado: cursoExistente ? cursoExistente.bloqueado : false});
         if(id) await sbUpdate("cursos", {id:id}, row);
         else await sbInsert("cursos", row);
         await fetchAll();
@@ -1412,6 +1515,12 @@ document.addEventListener("click", async function(e){
       case "del-persona": {
         var pdni = el.getAttribute("data-dni");
         if(confirm("¿Eliminar esta persona? Se eliminarán sus inscripciones y registros de asistencia.")){
+          // quitarlo de la lista de monitores de los cursos donde figure
+          var cursosConEl = db.cursos.filter(function(c){ return esMonitorDe(c, pdni); });
+          for(var ci=0; ci<cursosConEl.length; ci++){
+            var restantes = monitoresDeCurso(cursosConEl[ci]).filter(function(d){ return d!==pdni; });
+            await sbUpdate("cursos", {id:cursosConEl[ci].id}, {monitores:restantes, monitor_dni:restantes[0]||null});
+          }
           await sbDelete("usuarios", {dni:pdni});
           await fetchAll();
           toast("Registro eliminado."); renderAdminTab();
@@ -1426,11 +1535,28 @@ document.addEventListener("click", async function(e){
         var rol = el.getAttribute("data-rol");
         var existingDni = el.getAttribute("data-dni");
         if(!nombres || !apellidos || !pdniField || !celular){ toast("Complete todos los campos.", "err"); break; }
+        var dniFinal = existingDni || pdniField;
         if(!existingDni){
           if(findUsuario(pdniField)){ toast("Ya existe una persona con ese DNI.", "err"); break; }
           await sbInsert("usuarios", {dni:pdniField, celular:celular, nombre:nombres, apellido:apellidos, rol:rol, activo:true});
         } else {
           await sbUpdate("usuarios", {dni:existingDni}, {nombre:nombres, apellido:apellidos, celular:celular});
+        }
+        // Alumno: actualizar el curso inscrito en el trimestre elegido
+        var selCursoAlu = document.getElementById("f-p-curso");
+        if(selCursoAlu){
+          var trimAlu = document.getElementById("f-p-trimestre").value;
+          var nuevoCurso = selCursoAlu.value;
+          var actualesTrim = db.inscripciones.filter(function(i){
+            if(i.dni !== dniFinal) return false;
+            var cc = findCurso(i.cursoId);
+            return cc && cc.trimestreId === trimAlu;
+          });
+          for(var ii=0; ii<actualesTrim.length; ii++){
+            if(actualesTrim[ii].cursoId !== nuevoCurso) await sbDelete("inscripciones", {dni:dniFinal, curso_id:actualesTrim[ii].cursoId});
+          }
+          var yaEnNuevo = actualesTrim.some(function(i){ return i.cursoId === nuevoCurso; });
+          if(nuevoCurso && !yaEnNuevo) await sbInsert("inscripciones", {dni:dniFinal, curso_id:nuevoCurso});
         }
         await fetchAll();
         closeModal(); toast("Guardado correctamente."); renderAdminTab();
@@ -1478,7 +1604,12 @@ document.addEventListener("click", async function(e){
         var monitorSel = document.getElementById("sel-masivo-monitor").value;
         var lineas = document.getElementById("txt-masivo-cursos").value.split("\n").map(function(s){return s.trim();}).filter(Boolean);
         if(!lineas.length){ toast("Ingrese al menos un nombre de curso.", "err"); break; }
-        var filas = lineas.map(function(nombre){ return {nombre:nombre, trimestre_id:trimestreSel, monitor_dni:monitorSel||null}; });
+        if(monitorSel){
+          var yaUsado = db.cursos.some(function(c){ return c.trimestreId===trimestreSel && esMonitorDe(c, monitorSel); });
+          if(lineas.length > 1){ toast("Un monitor no puede estar en varios cursos del mismo trimestre. Cree los cursos sin monitor y asígnelos desde Editar.", "err"); break; }
+          if(yaUsado){ toast("Ese monitor ya está asignado a otro curso de este trimestre.", "err"); break; }
+        }
+        var filas = lineas.map(function(nombre){ return cursoToRow({nombre:nombre, trimestreId:trimestreSel, monitoresDni: monitorSel ? [monitorSel] : [], bloqueado:false}); });
         await sbInsert("cursos", filas);
         await fetchAll();
         toast(lineas.length + " curso(s) creado(s)."); renderAdminTab();

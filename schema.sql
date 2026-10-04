@@ -36,6 +36,11 @@ create table if not exists cursos (
 -- (sin la columna "bloqueado"), esto la agrega sin afectar los datos existentes.
 alter table cursos add column if not exists bloqueado boolean not null default false;
 
+-- Hasta 4 monitores por curso (lista de DNI). "monitor_dni" se mantiene como el primero (compatibilidad).
+alter table cursos add column if not exists monitores text[] not null default '{}';
+update cursos set monitores = array[monitor_dni]
+  where monitor_dni is not null and cardinality(monitores) = 0;
+
 create table if not exists inscripciones (
   id            text primary key default ('ins_' || substr(md5(random()::text || clock_timestamp()::text), 1, 10)),
   dni           text not null references usuarios(dni) on delete cascade,
