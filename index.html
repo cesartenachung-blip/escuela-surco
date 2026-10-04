@@ -4,6 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title>Escuela de Líderes - Comunidad Cristiana Agua Viva Surco</title>
+<meta name="theme-color" content="#17113f">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700;800&family=Instrument+Serif&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -11,6 +17,7 @@
 <!-- ==================== CARGA / ERROR ==================== -->
 <div id="screen-loading">
   <div class="loading-box">
+    <img class="login-logo" src="logo.png" alt="Agua Viva">
     <div class="spinner"></div>
     <p>Conectando con la base de datos...</p>
   </div>
@@ -20,31 +27,31 @@
 
 <!-- ==================== LOGIN ==================== -->
 <div id="screen-login" class="hidden">
-  <div class="login-wrap">
-    <div class="login-badge">
-      <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path d="M32 8C22 14 18 24 22 34c2 5 6 8 10 10 4-2 8-5 10-10 4-10 0-20-10-26z" stroke="white" stroke-width="2.4" fill="none"/>
-        <path d="M32 18c-5 4-7 10-4 16" stroke="white" stroke-width="2.2" fill="none" stroke-linecap="round"/>
-        <path d="M42 16c2 8-2 16-10 20" stroke="white" stroke-width="2.2" fill="none" stroke-linecap="round"/>
-      </svg>
-    </div>
-    <h1 class="login-title">Comunidad Cristiana Agua Viva</h1>
-    <p class="login-sub">Ingresa con tu usuario para continuar</p>
-    <div class="login-card">
-      <div class="login-error" id="login-error">Usuario o clave incorrectos.</div>
-      <form id="login-form">
-        <div class="field-group">
-          <label for="login-dni">Usuario</label>
-          <input type="text" id="login-dni" inputmode="numeric" autocomplete="username" placeholder="Número de DNI" required>
-        </div>
-        <div class="field-group">
-          <label for="login-celular">Contraseña</label>
-          <input type="password" id="login-celular" inputmode="numeric" autocomplete="current-password" placeholder="Número de celular" required>
-        </div>
-        <button type="submit" class="btn-primary">Ingresar</button>
-      </form>
-    </div>
-    <p class="login-hint">Escuela de Líderes &middot; Sede Surco<br>El usuario es su número de <b>DNI</b> y la clave es su número de <b>celular</b>.</p>
+  <div class="login-shell">
+    <section class="login-hero">
+      <img class="login-logo" src="logo.png" alt="Comunidad Cristiana Agua Viva">
+      <h1 class="login-display">Escuela<br>de Líderes</h1>
+      <p class="login-line1"><strong>Comunidad Cristiana Agua Viva.</strong> <span>Sede Surco</span></p>
+      <p class="login-line2">Asistencia, devocional y notas en un solo lugar</p>
+    </section>
+    <section class="login-panel">
+      <div class="login-card">
+        <p class="login-card-sub">Ingresa con tu usuario para continuar</p>
+        <div class="login-error" id="login-error">Usuario o clave incorrectos.</div>
+        <form id="login-form">
+          <div class="field-group">
+            <label for="login-dni">Usuario</label>
+            <input type="text" id="login-dni" inputmode="numeric" autocomplete="username" placeholder="Número de DNI" required>
+          </div>
+          <div class="field-group">
+            <label for="login-celular">Contraseña</label>
+            <input type="password" id="login-celular" inputmode="numeric" autocomplete="current-password" placeholder="Número de celular" required>
+          </div>
+          <button type="submit" class="btn-primary">Ingresar</button>
+        </form>
+      </div>
+      <p class="login-hint">El usuario es su número de <b>DNI</b> y la clave es su número de <b>celular</b>.</p>
+    </section>
   </div>
 </div>
 

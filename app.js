@@ -244,8 +244,8 @@ function showVistaSelector(user, vistas){
   var screen = document.getElementById("screen-vista-selector");
   screen.innerHTML =
     '<div class="login-wrap">' +
-      '<div class="login-badge">'+logoSvg()+'</div>' +
-      '<h1 class="login-title">Comunidad Cristiana Agua Viva</h1>' +
+      logoSvg("login-logo") +
+      '<h1 class="login-title">Escuela de Líderes</h1>' +
       '<p class="login-sub">Hola, '+escapeHtml(user.nombre)+'. Este trimestre participas en más de un rol.<br>¿Cómo deseas ingresar?</p>' +
       '<div class="login-card"><div class="vista-options">'+opciones+'</div></div>' +
     '</div>';
@@ -450,12 +450,8 @@ function openQrShowModal(dni){
 // ---------------------------------------------------------------------
 // Encabezado común
 // ---------------------------------------------------------------------
-function logoSvg(){
-  return '<svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">' +
-    '<path d="M32 8C22 14 18 24 22 34c2 5 6 8 10 10 4-2 8-5 10-10 4-10 0-20-10-26z" stroke="white" stroke-width="2.4" fill="none"/>' +
-    '<path d="M32 18c-5 4-7 10-4 16" stroke="white" stroke-width="2.2" fill="none" stroke-linecap="round"/>' +
-    '<path d="M42 16c2 8-2 16-10 20" stroke="white" stroke-width="2.2" fill="none" stroke-linecap="round"/>' +
-    '</svg>';
+function logoSvg(cls){
+  return '<img src="logo.png" alt="Agua Viva"'+(cls?' class="'+cls+'"':'')+'>';
 }
 function iconCamera(){
   return '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 8.5A1.5 1.5 0 0 1 5.5 7h2l1-2h7l1 2h2A1.5 1.5 0 0 1 20 8.5v9A1.5 1.5 0 0 1 18.5 19h-13A1.5 1.5 0 0 1 4 17.5v-9Z" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12.5" r="3.4" stroke="currentColor" stroke-width="1.6"/></svg>';
@@ -819,7 +815,7 @@ function renderAlumnoContent(user){
       '<div class="stat-row">' +
         '<div class="stat"><div class="num">'+notas.trabajo.toFixed(1)+'</div><div class="lbl">Trabajo Final</div></div>' +
         '<div class="stat"><div class="num">'+notas.examen.toFixed(1)+'</div><div class="lbl">Examen Final</div></div>' +
-        '<div class="stat"><div class="num">'+notas.promedio.toFixed(2)+'</div><div class="lbl">Promedio Final</div></div>' +
+        '<div class="stat"><div class="num">'+notas.notaEscuela.toFixed(2)+'</div><div class="lbl">Nota Escuela</div></div>' +
       '</div>' +
       '<div style="text-align:center;margin-top:6px">'+estadoHtml+'</div>' +
       '<p class="hint-text" style="text-align:center;margin-bottom:0">Para aprobar: asistir a mínimo '+MIN_CLASES_APROBAR+' clases y obtener mínimo '+NOTA_MINIMA_TRABAJO_EXAMEN+' en Trabajo Final y Examen Final.</p>' +

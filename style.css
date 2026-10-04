@@ -1,4 +1,11 @@
 :root{
+  --night-1:#120d33;
+  --night-2:#1b1448;
+  --night-3:#2a1d5e;
+  --lav:#b9aae8;
+  --gold:#f2d479;
+  --font-display:"Instrument Serif",Georgia,"Times New Roman",serif;
+  --font-body:"Figtree",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   --purple-1:#5b2fb8;
   --purple-2:#3d1f8a;
   --purple-3:#6d3fc7;
@@ -19,7 +26,7 @@
 *{box-sizing:border-box}
 html,body{margin:0;padding:0}
 body{
-  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  font-family:var(--font-body);
   background:#f0ecfb;
   color:var(--ink);
   min-height:100vh;
@@ -29,32 +36,56 @@ button{font-family:inherit;cursor:pointer}
 input,select,textarea{font-family:inherit}
 .hidden{display:none !important}
 
-/* ---------- LOGIN ---------- */
-#screen-login, #screen-vista-selector{
+/* ---------- PORTADA / LOGIN (paleta de la portada Escuela de Líderes) ---------- */
+#screen-login, #screen-vista-selector, #screen-loading, #screen-conn-error{
   min-height:100vh;
   display:flex;
   align-items:center;
   justify-content:center;
-  padding:32px 16px;
-  background:radial-gradient(circle at 30% 0%, #7444d6 0%, var(--purple-1) 45%, var(--purple-2) 100%);
+  padding:32px 20px;
+  position:relative;
+  overflow:hidden;
+  background:
+    radial-gradient(900px 620px at 88% 92%, rgba(122,70,205,.50), transparent 62%),
+    radial-gradient(700px 520px at 8% -5%, rgba(96,62,180,.38), transparent 60%),
+    linear-gradient(135deg,var(--night-1) 0%,var(--night-2) 55%,var(--night-3) 100%);
 }
 .vista-options{display:flex;flex-direction:column;gap:12px}
 .vista-option-btn{margin-top:0}
-.login-wrap{width:100%;max-width:420px;text-align:center}
-.login-badge{
-  width:96px;height:96px;border-radius:24px;margin:0 auto 22px;
-  background:rgba(255,255,255,.14);
-  display:flex;align-items:center;justify-content:center;
-  box-shadow:0 10px 30px -8px rgba(0,0,0,.35);
+
+.login-shell{
+  width:100%;max-width:1080px;
+  display:grid;grid-template-columns:1.15fr .85fr;gap:64px;align-items:center;
 }
-.login-badge svg{width:52px;height:52px}
-.login-title{color:#fff;font-size:1.9rem;font-weight:700;margin:0 0 6px;letter-spacing:.2px}
-.login-sub{color:#e6def7;font-size:1.02rem;margin:0 0 28px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+.login-hero{text-align:left}
+.login-logo{
+  width:84px;height:84px;border-radius:22px;display:block;
+  box-shadow:0 0 0 1px rgba(255,255,255,.10), 0 18px 46px -10px rgba(122,69,149,.85);
+}
+.login-display{
+  font-family:var(--font-display);font-weight:400;color:#f4f1ff;
+  font-size:clamp(3.4rem,8.4vw,7rem);line-height:.92;letter-spacing:-.025em;margin:34px 0 28px;
+}
+.login-line1{color:#fff;font-size:1.15rem;margin:0 0 8px;line-height:1.4}
+.login-line1 strong{font-weight:700}
+.login-line1 span{color:var(--lav)}
+.login-line2{color:var(--gold);font-size:1.05rem;margin:0}
+.login-panel{width:100%;max-width:430px;justify-self:end}
+.login-card-sub{margin:0 0 22px;color:var(--ink-soft);font-size:1rem}
+
+/* selector de vista (misma portada, centrado) */
+.login-wrap{width:100%;max-width:430px;text-align:center}
+.login-wrap .login-logo{margin:0 auto 24px}
+.login-title{
+  font-family:var(--font-display);font-weight:400;color:#f4f1ff;
+  font-size:clamp(2.4rem,7vw,3.2rem);line-height:1;margin:0 0 12px;letter-spacing:-.02em;
+}
+.login-sub{color:var(--lav);font-size:1.02rem;margin:0 0 28px;line-height:1.5}
 .login-card{
   background:var(--card);
   border-radius:22px;
-  padding:34px 30px 30px;
-  box-shadow:var(--shadow);
+  padding:32px 30px 28px;
+  box-shadow:0 30px 70px -24px rgba(0,0,0,.65), 0 0 0 1px rgba(255,255,255,.06);
   text-align:left;
 }
 .login-card label{
@@ -67,6 +98,14 @@ input,select,textarea{font-family:inherit}
   transition:border-color .15s, box-shadow .15s;
 }
 .login-card input:focus{border-color:var(--purple-3);box-shadow:0 0 0 3px rgba(109,63,199,.15)}
+
+@media (max-width:880px){
+  #screen-login{align-items:flex-start;padding-top:40px}
+  .login-shell{grid-template-columns:1fr;gap:34px}
+  .login-logo{width:68px;height:68px;border-radius:18px}
+  .login-display{margin:24px 0 20px}
+  .login-panel{justify-self:stretch;max-width:none}
+}
 .btn-primary{
   width:100%;padding:15px 16px;border:none;border-radius:12px;
   background:linear-gradient(135deg,var(--purple-3),var(--purple-2));
@@ -80,24 +119,26 @@ input,select,textarea{font-family:inherit}
   font-size:.9rem;margin-bottom:16px;display:none;
 }
 .login-error.show{display:block}
-.login-hint{margin-top:18px;color:#e6def7;font-size:.78rem;line-height:1.5;opacity:.85}
+.login-hint{margin-top:18px;color:var(--lav);font-size:.8rem;line-height:1.5;text-align:center}
 .login-hint b{color:#fff}
 
 /* ---------- APP SHELL ---------- */
 #screen-app{min-height:100vh;display:flex;flex-direction:column}
 .app-header{
-  background:linear-gradient(120deg,var(--purple-1),var(--purple-2));
-  color:#fff;padding:18px 20px;display:flex;align-items:center;justify-content:space-between;gap:14px;
+  background:
+    radial-gradient(500px 160px at 95% 120%, rgba(122,70,205,.45), transparent 70%),
+    linear-gradient(120deg,var(--night-1),var(--night-3));
+  color:#fff;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;gap:14px;
   flex-wrap:wrap;box-shadow:0 6px 18px -8px rgba(36,20,84,.5);position:sticky;top:0;z-index:30;
 }
 .app-header .htitle{display:flex;align-items:center;gap:12px}
 .app-header .htitle .logo-chip{
-  width:42px;height:42px;border-radius:12px;background:rgba(255,255,255,.16);
-  display:flex;align-items:center;justify-content:center;flex-shrink:0;
+  width:46px;height:46px;border-radius:13px;overflow:hidden;flex-shrink:0;
+  box-shadow:0 0 0 1px rgba(255,255,255,.12), 0 8px 20px -6px rgba(122,69,149,.8);
 }
-.app-header .htitle .logo-chip svg{width:24px;height:24px}
-.app-header h1{font-size:1.05rem;margin:0;line-height:1.25;font-weight:700}
-.app-header .sede{font-size:.78rem;opacity:.85;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+.app-header .htitle .logo-chip img{width:100%;height:100%;display:block}
+.app-header h1{font-family:var(--font-display);font-size:1.45rem;margin:0;line-height:1.1;font-weight:400;letter-spacing:-.01em}
+.app-header .sede{font-size:.78rem;color:var(--lav)}
 .app-header .welcome{font-size:.85rem;opacity:.9;margin-top:1px}
 .header-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .pill-btn{
