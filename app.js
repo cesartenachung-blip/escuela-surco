@@ -72,17 +72,24 @@ function $(sel, ctx){ return (ctx||document).querySelector(sel); }
 var db = { usuarios:[], trimestres:[], cursos:[], inscripciones:[], asistencia:[] };
 
 // Mapeo snake_case (Postgres) <-> camelCase (usado por las vistas)
-var MAX_MONITORES_CURSO = 4;
+var MAX_MAESTROS_CURSO = 2;
+var MAX_MONITORES_CURSO = 2;
 function rowToCurso(r){
-  var lista = (Array.isArray(r.monitores) && r.monitores.length) ? r.monitores.slice() : (r.monitor_dni ? [r.monitor_dni] : []);
-  return {id:r.id, nombre:r.nombre, trimestreId:r.trimestre_id, monitoresDni:lista, bloqueado: !!r.bloqueado};
+  var monitores = (Array.isArray(r.monitores) && r.monitores.length) ? r.monitores.slice() : (r.monitor_dni ? [r.monitor_dni] : []);
+  var maestros = Array.isArray(r.maestros) ? r.maestros.slice() : [];
+  return {id:r.id, nombre:r.nombre, trimestreId:r.trimestre_id, maestrosDni:maestros, monitoresDni:monitores, bloqueado: !!r.bloqueado};
 }
 function cursoToRow(c){
-  var lista = (c.monitoresDni || []).filter(Boolean);
-  return {nombre:c.nombre, trimestre_id:c.trimestreId, monitores:lista, monitor_dni:lista[0]||null, bloqueado: !!c.bloqueado};
+  var maestros = (c.maestrosDni || []).filter(Boolean);
+  var monitores = (c.monitoresDni || []).filter(Boolean);
+  return {nombre:c.nombre, trimestre_id:c.trimestreId, maestros:maestros, monitores:monitores, monitor_dni:(monitores[0]||maestros[0]||null), bloqueado: !!c.bloqueado};
 }
-function monitoresDeCurso(c){ return (c && c.monitoresDni) ? c.monitoresDni : []; }
+function maestrosDeCurso(c){ return (c && c.maestrosDni) ? c.maestrosDni : []; }
+function soloMonitoresDeCurso(c){ return (c && c.monitoresDni) ? c.monitoresDni : []; }
+// Equipo del curso = maestros + monitores (ambos tienen el mismo acceso a la vista Monitor)
+function monitoresDeCurso(c){ return maestrosDeCurso(c).concat(soloMonitoresDeCurso(c)); }
 function esMonitorDe(c, dni){ return monitoresDeCurso(c).indexOf(dni) > -1; }
+function nombresDe(dnis){ return dnis.map(function(d){ var m=findUsuario(d); return m ? m.nombre+" "+m.apellido : ""; }).filter(Boolean).join(", "); }
 function rowToInscripcion(r){
   return {
     id:r.id, dni:r.dni, cursoId:r.curso_id,
@@ -600,6 +607,13 @@ function calcularNotaFinal(dni, cursoId){
   };
 }
 
+function equipoCursoHtml(curso){
+  var maes = nombresDe(maestrosDeCurso(curso)) || "—";
+  var mons = nombresDe(soloMonitoresDeCurso(curso)) || "—";
+  return '<p style="margin:-6px 0 14px;color:var(--ink-soft);font-size:.88rem;line-height:1.6">' +
+    '<b>Maestros:</b> '+escapeHtml(maes)+'<br><b>Monitores:</b> '+escapeHtml(mons)+'</p>';
+}
+
 function renderMonitorTable(){
   var host = document.getElementById("monitor-content");
   if(!host) return;
@@ -632,6 +646,7 @@ function renderMonitorTable(){
   host.innerHTML =
     '<div class="card">' +
       '<h2>'+escapeHtml(curso.nombre)+(curso.bloqueado?' <span class="badge-warn">Bloqueado</span>':'')+'</h2>' +
+      equipoCursoHtml(curso) +
       avisoBloqueo +
       '<div class="week-tabs">'+weekTabs+'</div>' +
       bodyHtml +
@@ -767,7 +782,7 @@ function renderAlumnoContent(user){
     return;
   }
   var curso = findCurso(cursoId);
-  var monitoresTxt = monitoresDeCurso(curso).map(function(d){ var m=findUsuario(d); return m ? m.nombre+" "+m.apellido : ""; }).filter(Boolean).join(", ");
+  var equipoHtml = equipoCursoHtml(curso);
 
   var semanasAsis=0, semanasDevo=0, semanasVers=0, semanasInter=0;
   var rowsHtml = "";
@@ -802,7 +817,7 @@ function renderAlumnoContent(user){
   host.innerHTML =
     '<div class="card">' +
       '<h2>'+escapeHtml(curso.nombre)+'</h2>' +
-      '<p style="margin-top:-6px;color:var(--ink-soft);font-size:.88rem">Monitor(es): '+escapeHtml(monitoresTxt||"—")+'</p>' +
+      equipoHtml +
       '<div class="stat-row">' +
         '<div class="stat"><div class="num">'+semanasAsis+'/'+TOTAL_SEMANAS+'</div><div class="lbl">Asistencia</div></div>' +
         '<div class="stat"><div class="num">'+semanasDevo+'/'+TOTAL_SEMANAS+'</div><div class="lbl">Devocional</div></div>' +
@@ -879,12 +894,14 @@ function renderAdminCursos(host){
 
   var rows = cursosFiltrados.map(function(c){
     var t = findTrimestre(c.trimestreId);
-    var monsTxt = monitoresDeCurso(c).map(function(d){ var m=findUsuario(d); return m ? m.nombre+" "+m.apellido : ""; }).filter(Boolean).join(", ");
+    var maesTxt = nombresDe(maestrosDeCurso(c));
+    var monsTxt = nombresDe(soloMonitoresDeCurso(c));
     var n = inscritosDeCurso(c.id).length;
     var badgeBloqueo = c.bloqueado ? ' <span class="badge-warn">Bloqueado</span>' : '';
     return '<tr>' +
       '<td><strong>'+escapeHtml(c.nombre)+'</strong>'+badgeBloqueo+'</td>' +
       '<td>'+escapeHtml(t?t.nombre:"—")+'</td>' +
+      '<td>'+escapeHtml(maesTxt||"Sin asignar")+'</td>' +
       '<td>'+escapeHtml(monsTxt||"Sin asignar")+'</td>' +
       '<td>'+n+'</td>' +
       '<td class="btn-row">' +
@@ -909,7 +926,7 @@ function renderAdminCursos(host){
         '<button class="btn" data-action="new-curso">+ Nuevo curso</button>' +
       '</div>' +
       (cursosFiltrados.length ?
-        '<div class="table-wrap" style="margin-top:16px"><table><thead><tr><th>Curso</th><th>Trimestre</th><th>Monitor</th><th>Inscritos</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'
+        '<div class="table-wrap" style="margin-top:16px"><table><thead><tr><th>Curso</th><th>Trimestre</th><th>Maestros</th><th>Monitores</th><th>Inscritos</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'
         : '<div class="empty"><p>No hay cursos para este filtro.</p></div>') +
     '</div>';
 
@@ -1228,26 +1245,29 @@ function monitoresDisponibles(trimestreId, cursoIdActual){
   return db.usuarios.filter(function(u){ return u.rol !== "admin" && !usados[u.dni]; })
     .sort(function(a,b){ return (a.apellido+a.nombre).localeCompare(b.apellido+b.nombre); });
 }
-function htmlSelectoresMonitor(trimestreId, cursoIdActual, seleccionados){
+var ETIQUETAS_EQUIPO = ["Maestro 1","Maestro 2","Monitor 1","Monitor 2"];
+// seleccionados: [maestro1, maestro2, monitor1, monitor2]
+function htmlSelectoresEquipo(trimestreId, cursoIdActual, seleccionados){
   var disponibles = monitoresDisponibles(trimestreId, cursoIdActual);
   var html = "";
-  for(var i=0; i<MAX_MONITORES_CURSO; i++){
+  for(var i=0; i<ETIQUETAS_EQUIPO.length; i++){
     var propio = seleccionados[i] || "";
     var otros = seleccionados.filter(function(d, j){ return j !== i && d; });
     var ops = '<option value="">Sin asignar</option>' + disponibles.filter(function(u){ return otros.indexOf(u.dni) === -1; }).map(function(m){
       return '<option value="'+m.dni+'" '+(m.dni===propio?"selected":"")+'>'+escapeHtml(m.apellido+" "+m.nombre)+'</option>';
     }).join("");
-    html += '<div class="field" style="margin-bottom:10px"><label>Monitor '+(i+1)+'</label><select class="f-curso-monitor-sel">'+ops+'</select></div>';
+    html += '<div class="field" style="margin-bottom:10px"><label>'+ETIQUETAS_EQUIPO[i]+'</label><select class="f-curso-equipo-sel">'+ops+'</select></div>';
   }
   return html;
 }
-function refrescarSelectoresMonitor(cursoIdActual){
+function leerSelectoresEquipo(){
+  return Array.prototype.slice.call(document.querySelectorAll(".f-curso-equipo-sel")).map(function(sel){ return sel.value; });
+}
+function refrescarSelectoresEquipo(cursoIdActual){
   var trimestreId = document.getElementById("f-curso-trimestre").value;
   var disponibles = monitoresDisponibles(trimestreId, cursoIdActual).map(function(u){ return u.dni; });
-  var actuales = Array.prototype.slice.call(document.querySelectorAll(".f-curso-monitor-sel")).map(function(sel){ return sel.value; });
-  // se descartan los que ya no están disponibles en el trimestre elegido
-  actuales = actuales.map(function(d){ return disponibles.indexOf(d) > -1 ? d : ""; });
-  document.getElementById("f-curso-monitores").innerHTML = htmlSelectoresMonitor(trimestreId, cursoIdActual, actuales);
+  var actuales = leerSelectoresEquipo().map(function(d){ return disponibles.indexOf(d) > -1 ? d : ""; });
+  document.getElementById("f-curso-monitores").innerHTML = htmlSelectoresEquipo(trimestreId, cursoIdActual, actuales);
 }
 
 function openCursoModal(cursoId){
@@ -1256,20 +1276,22 @@ function openCursoModal(cursoId){
   var opcionesTrimestres = db.trimestres.map(function(t){
     return '<option value="'+t.id+'" '+(t.id===trimestreInicial?"selected":"")+'>'+escapeHtml(t.nombre)+'</option>';
   }).join("");
-  var seleccionados = curso ? monitoresDeCurso(curso).slice(0, MAX_MONITORES_CURSO) : [];
+  var maes = curso ? maestrosDeCurso(curso) : [];
+  var mons = curso ? soloMonitoresDeCurso(curso) : [];
+  var seleccionados = [maes[0]||"", maes[1]||"", mons[0]||"", mons[1]||""];
   var html = modalShell(
     curso ? "Editar curso" : "Nuevo curso",
     '<div class="field" style="margin-bottom:14px"><label>Nombre del curso</label><input type="text" id="f-curso-nombre" value="'+escapeHtml(curso?curso.nombre:"")+'"></div>' +
     '<div class="field" style="margin-bottom:14px"><label>Trimestre</label><select id="f-curso-trimestre">'+opcionesTrimestres+'</select></div>' +
-    '<p class="hint-text" style="margin:0 0 10px">Hasta '+MAX_MONITORES_CURSO+' monitores por curso. Un monitor no puede estar en dos cursos del mismo trimestre.</p>' +
-    '<div id="f-curso-monitores">'+htmlSelectoresMonitor(trimestreInicial, curso?curso.id:null, seleccionados)+'</div>',
+    '<p class="hint-text" style="margin:0 0 10px">Hasta 2 maestros y 2 monitores por curso (mismo acceso a la vista Monitor). Una persona no puede estar en dos cursos del mismo trimestre.</p>' +
+    '<div id="f-curso-monitores">'+htmlSelectoresEquipo(trimestreInicial, curso?curso.id:null, seleccionados)+'</div>',
     '<button class="btn secondary" data-action="close-modal">Cancelar</button>' +
     '<button class="btn" data-action="save-curso" data-id="'+(curso?curso.id:"")+'">Guardar</button>'
   );
   openModal(html);
   var idActual = curso ? curso.id : null;
-  document.getElementById("f-curso-trimestre").addEventListener("change", function(){ refrescarSelectoresMonitor(idActual); });
-  document.getElementById("f-curso-monitores").addEventListener("change", function(){ refrescarSelectoresMonitor(idActual); });
+  document.getElementById("f-curso-trimestre").addEventListener("change", function(){ refrescarSelectoresEquipo(idActual); });
+  document.getElementById("f-curso-monitores").addEventListener("change", function(){ refrescarSelectoresEquipo(idActual); });
 }
 
 // ---- Inscripción de un alumno dentro del modal Editar/Nuevo alumno ----
@@ -1477,17 +1499,19 @@ document.addEventListener("click", async function(e){
       case "save-curso": {
         var nombre = document.getElementById("f-curso-nombre").value.trim();
         var trimestreId = document.getElementById("f-curso-trimestre").value;
-        var monitoresSel = Array.prototype.slice.call(document.querySelectorAll(".f-curso-monitor-sel")).map(function(sel){ return sel.value; }).filter(Boolean);
+        var equipoSel = leerSelectoresEquipo();
+        var maestrosSel = [equipoSel[0], equipoSel[1]].filter(Boolean);
+        var monitoresSel = [equipoSel[2], equipoSel[3]].filter(Boolean);
+        var todosSel = maestrosSel.concat(monitoresSel);
         if(!nombre){ toast("Ingrese el nombre del curso.", "err"); break; }
         var id = el.getAttribute("data-id");
-        if(monitoresSel.length > MAX_MONITORES_CURSO){ toast("Máximo "+MAX_MONITORES_CURSO+" monitores por curso.", "err"); break; }
-        if(monitoresSel.some(function(d,i){ return monitoresSel.indexOf(d) !== i; })){ toast("No repita el mismo monitor en un curso.", "err"); break; }
+        if(todosSel.some(function(d,i){ return todosSel.indexOf(d) !== i; })){ toast("No repita la misma persona en un curso.", "err"); break; }
         var ocupados = {};
         db.cursos.forEach(function(c){ if(c.trimestreId===trimestreId && c.id!==id) monitoresDeCurso(c).forEach(function(d){ ocupados[d]=c.nombre; }); });
-        var repetido = monitoresSel.filter(function(d){ return ocupados[d]; })[0];
-        if(repetido){ var mr = findUsuario(repetido); toast((mr?mr.nombre+" "+mr.apellido:"El monitor")+" ya está en el curso "+ocupados[repetido]+" de este trimestre.", "err"); break; }
+        var repetido = todosSel.filter(function(d){ return ocupados[d]; })[0];
+        if(repetido){ var mr = findUsuario(repetido); toast((mr?mr.nombre+" "+mr.apellido:"La persona")+" ya está en el curso "+ocupados[repetido]+" de este trimestre.", "err"); break; }
         var cursoExistente = id ? findCurso(id) : null;
-        var row = cursoToRow({nombre:nombre, trimestreId:trimestreId, monitoresDni:monitoresSel, bloqueado: cursoExistente ? cursoExistente.bloqueado : false});
+        var row = cursoToRow({nombre:nombre, trimestreId:trimestreId, maestrosDni:maestrosSel, monitoresDni:monitoresSel, bloqueado: cursoExistente ? cursoExistente.bloqueado : false});
         if(id) await sbUpdate("cursos", {id:id}, row);
         else await sbInsert("cursos", row);
         await fetchAll();
@@ -1514,8 +1538,10 @@ document.addEventListener("click", async function(e){
           // quitarlo de la lista de monitores de los cursos donde figure
           var cursosConEl = db.cursos.filter(function(c){ return esMonitorDe(c, pdni); });
           for(var ci=0; ci<cursosConEl.length; ci++){
-            var restantes = monitoresDeCurso(cursosConEl[ci]).filter(function(d){ return d!==pdni; });
-            await sbUpdate("cursos", {id:cursosConEl[ci].id}, {monitores:restantes, monitor_dni:restantes[0]||null});
+            var cc = cursosConEl[ci];
+            var maesR = maestrosDeCurso(cc).filter(function(d){ return d!==pdni; });
+            var monsR = soloMonitoresDeCurso(cc).filter(function(d){ return d!==pdni; });
+            await sbUpdate("cursos", {id:cc.id}, {maestros:maesR, monitores:monsR, monitor_dni:(monsR[0]||maesR[0]||null)});
           }
           await sbDelete("usuarios", {dni:pdni});
           await fetchAll();
@@ -1605,7 +1631,7 @@ document.addEventListener("click", async function(e){
           if(lineas.length > 1){ toast("Un monitor no puede estar en varios cursos del mismo trimestre. Cree los cursos sin monitor y asígnelos desde Editar.", "err"); break; }
           if(yaUsado){ toast("Ese monitor ya está asignado a otro curso de este trimestre.", "err"); break; }
         }
-        var filas = lineas.map(function(nombre){ return cursoToRow({nombre:nombre, trimestreId:trimestreSel, monitoresDni: monitorSel ? [monitorSel] : [], bloqueado:false}); });
+        var filas = lineas.map(function(nombre){ return cursoToRow({nombre:nombre, trimestreId:trimestreSel, maestrosDni: [], monitoresDni: monitorSel ? [monitorSel] : [], bloqueado:false}); });
         await sbInsert("cursos", filas);
         await fetchAll();
         toast(lineas.length + " curso(s) creado(s)."); renderAdminTab();

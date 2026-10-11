@@ -41,6 +41,9 @@ alter table cursos add column if not exists monitores text[] not null default '{
 update cursos set monitores = array[monitor_dni]
   where monitor_dni is not null and cardinality(monitores) = 0;
 
+-- Maestros del curso (hasta 2). Maestros y monitores tienen el mismo acceso a la vista Monitor.
+alter table cursos add column if not exists maestros text[] not null default '{}';
+
 create table if not exists inscripciones (
   id            text primary key default ('ins_' || substr(md5(random()::text || clock_timestamp()::text), 1, 10)),
   dni           text not null references usuarios(dni) on delete cascade,
