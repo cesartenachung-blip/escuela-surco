@@ -643,7 +643,7 @@ function renderSemanaHtml(cursoId, alumnos, todosInscritos, semana, curso, q){
     var r = getAsistencia(a.dni, cursoId, semana) || {asistio:false, devocional:false, versiculo:false, intercesion:false, fecha:null};
     var dis = curso.bloqueado ? "disabled" : "";
     return '<tr>' +
-      '<td><strong>'+escapeHtml(a.apellido+" "+a.nombre)+'</strong><br><span style="color:var(--ink-soft);font-size:.78rem">DNI '+escapeHtml(a.dni)+'</span></td>' +
+      '<td><strong>'+escapeHtml(a.apellido+" "+a.nombre)+'</strong><br><span style="color:var(--ink-soft);font-size:.78rem">DNI '+escapeHtml(a.dni)+' - Celular: '+escapeHtml(a.celular||"—")+'</span></td>' +
       '<td class="chk-cell"><input type="checkbox" class="chk" data-action="toggle" data-dni="'+a.dni+'" data-campo="asistio" '+(r.asistio?"checked":"")+' '+dis+'></td>' +
       '<td class="chk-cell"><input type="checkbox" class="chk" data-action="toggle" data-dni="'+a.dni+'" data-campo="devocional" '+(r.devocional?"checked":"")+' '+dis+'></td>' +
       '<td class="chk-cell"><input type="checkbox" class="chk" data-action="toggle" data-dni="'+a.dni+'" data-campo="versiculo" '+(r.versiculo?"checked":"")+' '+dis+'></td>' +
