@@ -89,6 +89,12 @@ function soloMonitoresDeCurso(c){ return (c && c.monitoresDni) ? c.monitoresDni 
 // Equipo del curso = maestros + monitores (ambos tienen el mismo acceso a la vista Monitor)
 function monitoresDeCurso(c){ return maestrosDeCurso(c).concat(soloMonitoresDeCurso(c)); }
 function esMonitorDe(c, dni){ return monitoresDeCurso(c).indexOf(dni) > -1; }
+// "Apellidos, Nombres" y orden alfabético (español, sin distinguir tildes/mayúsculas)
+function nombreLista(u){ return u.apellido + ", " + u.nombre; }
+function compararPersonas(a, b){
+  var o = {sensitivity:"base"};
+  return a.apellido.localeCompare(b.apellido, "es", o) || a.nombre.localeCompare(b.nombre, "es", o);
+}
 function nombresDe(dnis){ return dnis.map(function(d){ var m=findUsuario(d); return m ? m.nombre+" "+m.apellido : ""; }).filter(Boolean).join(", "); }
 function rowToInscripcion(r){
   return {
@@ -624,7 +630,7 @@ function renderMonitorTable(){
   }
   var curso = findCurso(cursoId);
   var todosInscritos = inscritosDeCurso(cursoId).sort(function(a,b){
-    return (a.apellido+a.nombre).localeCompare(b.apellido+b.nombre);
+    return compararPersonas(a, b);
   });
   var q = normalize(monitorViewState.q);
   var alumnos = q ? todosInscritos.filter(function(a){ return normalize(a.nombre+" "+a.apellido).indexOf(q) > -1; }) : todosInscritos;
@@ -658,7 +664,7 @@ function renderSemanaHtml(cursoId, alumnos, todosInscritos, semana, curso, q){
     var r = getAsistencia(a.dni, cursoId, semana) || {asistio:false, devocional:false, versiculo:false, intercesion:false, fecha:null};
     var dis = curso.bloqueado ? "disabled" : "";
     return '<tr>' +
-      '<td><strong>'+escapeHtml(a.apellido+" "+a.nombre)+'</strong><br><span style="color:var(--ink-soft);font-size:.78rem">DNI '+escapeHtml(a.dni)+' - Celular: '+escapeHtml(a.celular||"—")+'</span></td>' +
+      '<td><strong>'+escapeHtml(nombreLista(a))+'</strong><br><span style="color:var(--ink-soft);font-size:.78rem">DNI '+escapeHtml(a.dni)+' - Celular: '+escapeHtml(a.celular||"—")+'</span></td>' +
       '<td class="chk-cell"><input type="checkbox" class="chk" data-action="toggle" data-dni="'+a.dni+'" data-campo="asistio" '+(r.asistio?"checked":"")+' '+dis+'></td>' +
       '<td class="chk-cell"><input type="checkbox" class="chk" data-action="toggle" data-dni="'+a.dni+'" data-campo="devocional" '+(r.devocional?"checked":"")+' '+dis+'></td>' +
       '<td class="chk-cell"><input type="checkbox" class="chk" data-action="toggle" data-dni="'+a.dni+'" data-campo="versiculo" '+(r.versiculo?"checked":"")+' '+dis+'></td>' +
@@ -709,7 +715,7 @@ function renderPromedioFinalHtml(cursoId, todosInscritos, curso){
       : (d.notas.aprobado ? '<span class="badge-ok">Aprobado</span>' : '<span class="badge-warn">Desaprobado</span>');
     function celda(nota, cant){ return '<td>'+nota.toFixed(2)+' <span style="color:var(--ink-soft);font-size:.72rem">('+cant+')</span></td>'; }
     return '<tr>' +
-      '<td><strong>'+escapeHtml(d.alumno.apellido+" "+d.alumno.nombre)+'</strong></td>' +
+      '<td><strong>'+escapeHtml(nombreLista(d.alumno))+'</strong></td>' +
       celda(d.notas.notaAsis, d.notas.totalAsis) +
       celda(d.notas.notaDevo, d.notas.totalDevo) +
       celda(d.notas.notaVers, d.notas.totalVers) +
@@ -1018,7 +1024,7 @@ function renderAdminPersonasContent(rol){
   }).filter(function(u){
     if(!textoBusqueda) return true;
     return normalize(u.nombre+" "+u.apellido).indexOf(textoBusqueda) > -1;
-  }).sort(function(a,b){ return (a.apellido+a.nombre).localeCompare(b.apellido+b.nombre); });
+  }).sort(compararPersonas);
 
   var rows = lista.map(function(u){
     var cursosTodos = esAlumno ? cursosDeAlumno(u.dni) : cursosDeMonitor(u.dni);
@@ -1030,7 +1036,7 @@ function renderAdminPersonasContent(rol){
     var otroRol = esAlumno ? (cursosDeMonitor(u.dni).length>0) : (cursosDeAlumno(u.dni).length>0);
     var badgeDual = otroRol ? ' <span class="badge-muted">también '+(esAlumno?"monitor":"alumno")+'</span>' : '';
     return '<tr>' +
-      '<td><strong>'+escapeHtml(u.apellido+" "+u.nombre)+'</strong>'+badgeDual+'</td>' +
+      '<td><strong>'+escapeHtml(nombreLista(u))+'</strong>'+badgeDual+'</td>' +
       '<td>'+escapeHtml(u.dni)+'</td>' +
       '<td>'+escapeHtml(u.celular)+'</td>' +
       '<td style="font-size:.82rem">'+cursosTxt+'</td>' +
@@ -1146,7 +1152,7 @@ function renderAdminIntercesionTable(){
     filas = filas.filter(function(f){ return normalize(f.alumno.nombre+" "+f.alumno.apellido).indexOf(q) > -1; });
   }
   filas.sort(function(x,y){
-    var byName = (x.alumno.apellido+x.alumno.nombre).localeCompare(y.alumno.apellido+y.alumno.nombre);
+    var byName = compararPersonas(x.alumno, y.alumno);
     return byName !== 0 ? byName : x.curso.nombre.localeCompare(y.curso.nombre);
   });
 
@@ -1160,7 +1166,7 @@ function renderAdminIntercesionTable(){
   var rows = filas.map(function(f){
     var r = getAsistencia(f.alumno.dni, f.curso.id, semana) || {intercesion:false, fecha:null};
     return '<tr>' +
-      '<td><strong>'+escapeHtml(f.alumno.apellido+" "+f.alumno.nombre)+'</strong><br><span style="color:var(--ink-soft);font-size:.78rem">DNI '+escapeHtml(f.alumno.dni)+'</span></td>' +
+      '<td><strong>'+escapeHtml(nombreLista(f.alumno))+'</strong><br><span style="color:var(--ink-soft);font-size:.78rem">DNI '+escapeHtml(f.alumno.dni)+'</span></td>' +
       (mostrarColumnaCurso ? '<td style="font-size:.82rem">'+escapeHtml(f.curso.nombre)+'</td>' : '') +
       '<td class="chk-cell"><input type="checkbox" class="chk" data-action="toggle-interc" data-dni="'+f.alumno.dni+'" data-curso="'+f.curso.id+'" '+(r.intercesion?"checked":"")+'></td>' +
       '<td><button class="btn small danger" data-action="reset-semana-interc" data-dni="'+f.alumno.dni+'" data-curso="'+f.curso.id+'">Restablecer</button></td>' +
@@ -1187,8 +1193,8 @@ function renderAdminMasivo(host){
   var opcionesTrimestres = db.trimestres.map(function(t){
     return '<option value="'+t.id+'">'+escapeHtml(t.nombre)+'</option>';
   }).join("");
-  var opcionesMonitores = '<option value="">Sin asignar</option>' + db.usuarios.filter(function(u){return u.rol!=="admin";}).sort(function(a,b){ return (a.apellido+a.nombre).localeCompare(b.apellido+b.nombre); }).map(function(m){
-    return '<option value="'+m.dni+'">'+escapeHtml(m.nombre+" "+m.apellido)+'</option>';
+  var opcionesMonitores = '<option value="">Sin asignar</option>' + db.usuarios.filter(function(u){return u.rol!=="admin";}).sort(compararPersonas).map(function(m){
+    return '<option value="'+m.dni+'">'+escapeHtml(nombreLista(m))+'</option>';
   }).join("");
 
   var filtroInscTrimestre = adminViewState.masivoInscTrimestre;
@@ -1214,14 +1220,14 @@ function renderAdminMasivo(host){
     '</div>' +
     '<div class="card">' +
       '<h2>Inscripción masiva de alumnos</h2>' +
-      '<p class="hint-text">Formato por línea: <code>DNI,Nombre,Apellido,Celular</code>. Si el DNI ya existe, solo se actualizan sus datos y se inscribe al curso. La clave de ingreso será el número de celular.</p>' +
+      '<p class="hint-text">Formato por línea: <code>DNI,Apellidos,Nombres,Celular</code>. Si el DNI ya existe, solo se actualizan sus datos y se inscribe al curso. La clave de ingreso será el número de celular.</p>' +
       (db.cursos.length ?
         '<div class="toolbar" style="margin-bottom:14px">' +
           '<div class="field"><label>Trimestre</label><select id="filtro-masivo-insc-trimestre">'+opcionesTrimestresInsc+'</select></div>' +
           '<div class="field"><label>Curso destino</label><select id="sel-masivo-curso">'+opcionesCursosInsc+'</select></div>' +
         '</div>'
         : '<p class="hint-text" style="color:var(--warn)">Debe crear al menos un curso antes de inscribir alumnos.</p>') +
-      '<textarea class="bulk" id="txt-masivo-alumnos" placeholder="30000005,Carla,Rios,977000005\n30000006,Jose,Diaz,977000006"></textarea>' +
+      '<textarea class="bulk" id="txt-masivo-alumnos" placeholder="30000005,Rios Vega,Carla,977000005\n30000006,Diaz Soto,Jose,977000006"></textarea>' +
       '<div style="margin-top:12px"><button class="btn" data-action="masivo-alumnos" '+(db.cursos.length && cursosInsc.length ?"":"disabled")+'>Inscribir alumnos</button></div>' +
       (db.cursos.length && !cursosInsc.length ? '<p class="hint-text" style="color:var(--warn)">No hay cursos en el trimestre elegido.</p>' : '') +
     '</div>';
@@ -1243,7 +1249,7 @@ function monitoresDisponibles(trimestreId, cursoIdActual){
     }
   });
   return db.usuarios.filter(function(u){ return u.rol !== "admin" && !usados[u.dni]; })
-    .sort(function(a,b){ return (a.apellido+a.nombre).localeCompare(b.apellido+b.nombre); });
+    .sort(compararPersonas);
 }
 var ETIQUETAS_EQUIPO = ["Maestro 1","Maestro 2","Monitor 1","Monitor 2"];
 // seleccionados: [maestro1, maestro2, monitor1, monitor2]
@@ -1254,7 +1260,7 @@ function htmlSelectoresEquipo(trimestreId, cursoIdActual, seleccionados){
     var propio = seleccionados[i] || "";
     var otros = seleccionados.filter(function(d, j){ return j !== i && d; });
     var ops = '<option value="">Sin asignar</option>' + disponibles.filter(function(u){ return otros.indexOf(u.dni) === -1; }).map(function(m){
-      return '<option value="'+m.dni+'" '+(m.dni===propio?"selected":"")+'>'+escapeHtml(m.apellido+" "+m.nombre)+'</option>';
+      return '<option value="'+m.dni+'" '+(m.dni===propio?"selected":"")+'>'+escapeHtml(nombreLista(m))+'</option>';
     }).join("");
     html += '<div class="field" style="margin-bottom:10px"><label>'+ETIQUETAS_EQUIPO[i]+'</label><select class="f-curso-equipo-sel">'+ops+'</select></div>';
   }
@@ -1646,7 +1652,7 @@ document.addEventListener("click", async function(e){
         lineasA.forEach(function(linea){
           var partes = linea.split(",").map(function(s){return s.trim();});
           if(partes.length < 4) return;
-          var dni=partes[0], nom=partes[1], ape=partes[2], cel=partes[3];
+          var dni=partes[0], ape=partes[1], nom=partes[2], cel=partes[3];
           var existente = findUsuario(dni);
           if(existente) existentesPatch.push({dni:dni, nombre:nom, apellido:ape, celular:cel});
           else nuevos.push({dni:dni, celular:cel, nombre:nom, apellido:ape, rol:"estudiante", activo:true});
