@@ -1301,14 +1301,26 @@ function openCursoModal(cursoId){
 }
 
 // ---- Inscripción de un alumno dentro del modal Editar/Nuevo alumno ----
-function cursoInscritoEnTrimestre(dni, trimestreId){
-  var c = cursosDeAlumno(dni).filter(function(x){ return x.trimestreId === trimestreId; })[0];
-  return c ? c.id : "";
+var MAX_CURSOS_ALUMNO = 3;
+function cursosInscritosEnTrimestre(dni, trimestreId){
+  return cursosDeAlumno(dni).filter(function(x){ return x.trimestreId === trimestreId; }).map(function(c){ return c.id; });
 }
-function htmlOpcionesCursoAlumno(trimestreId, seleccionado){
-  return '<option value="">Sin curso</option>' + cursosDeTrimestre(trimestreId).map(function(c){
-    return '<option value="'+c.id+'" '+(c.id===seleccionado?"selected":"")+'>'+escapeHtml(c.nombre)+'</option>';
-  }).join("");
+// Hasta 3 selectores de curso (un alumno puede estar en 2 o 3 cursos); no se repiten entre sí.
+function htmlSelectoresCursosAlumno(trimestreId, seleccionados){
+  var cursos = cursosDeTrimestre(trimestreId);
+  var html = "";
+  for(var i=0; i<MAX_CURSOS_ALUMNO; i++){
+    var propio = seleccionados[i] || "";
+    var otros = seleccionados.filter(function(d, j){ return j !== i && d; });
+    var ops = '<option value="">Sin curso</option>' + cursos.filter(function(c){ return otros.indexOf(c.id) === -1; }).map(function(c){
+      return '<option value="'+c.id+'" '+(c.id===propio?"selected":"")+'>'+escapeHtml(c.nombre)+'</option>';
+    }).join("");
+    html += '<div class="field" style="margin-top:10px"><label>Curso '+(i+1)+'</label><select class="f-p-curso-sel">'+ops+'</select></div>';
+  }
+  return html;
+}
+function leerCursosAlumnoModal(){
+  return Array.prototype.slice.call(document.querySelectorAll(".f-p-curso-sel")).map(function(x){ return x.value; });
 }
 
 function openPersonaModal(dni, rol){
@@ -1323,13 +1335,14 @@ function openPersonaModal(dni, rol){
       if(cs.length) trimInicial = cs[0].trimestreId;
     }
     if(!trimInicial && db.trimestres[0]) trimInicial = db.trimestres[0].id;
-    var cursoActual = persona ? cursoInscritoEnTrimestre(persona.dni, trimInicial) : "";
+    var cursosActuales = persona ? cursosInscritosEnTrimestre(persona.dni, trimInicial) : [];
     var opTrim = db.trimestres.map(function(t){
       return '<option value="'+t.id+'" '+(t.id===trimInicial?"selected":"")+'>'+escapeHtml(t.nombre)+'</option>';
     }).join("");
     extra =
       '<div class="field" style="margin-top:14px"><label>Trimestre</label><select id="f-p-trimestre">'+opTrim+'</select></div>' +
-      '<div class="field" style="margin-top:14px"><label>Curso inscrito</label><select id="f-p-curso">'+htmlOpcionesCursoAlumno(trimInicial, cursoActual)+'</select></div>';
+      '<p class="hint-text" style="margin:12px 0 0">Cursos inscritos en este trimestre (hasta '+MAX_CURSOS_ALUMNO+').</p>' +
+      '<div id="f-p-cursos">'+htmlSelectoresCursosAlumno(trimInicial, cursosActuales)+'</div>';
   }
   var html = modalShell(
     persona ? "Editar " + (esAlu?"alumno":"monitor") : "Nuevo " + (esAlu?"alumno":"monitor"),
@@ -1343,8 +1356,12 @@ function openPersonaModal(dni, rol){
   openModal(html);
   if(esAlu){
     document.getElementById("f-p-trimestre").addEventListener("change", function(e){
-      var actual = persona ? cursoInscritoEnTrimestre(persona.dni, e.target.value) : "";
-      document.getElementById("f-p-curso").innerHTML = htmlOpcionesCursoAlumno(e.target.value, actual);
+      var actuales = persona ? cursosInscritosEnTrimestre(persona.dni, e.target.value) : [];
+      document.getElementById("f-p-cursos").innerHTML = htmlSelectoresCursosAlumno(e.target.value, actuales);
+    });
+    document.getElementById("f-p-cursos").addEventListener("change", function(){
+      var trim = document.getElementById("f-p-trimestre").value;
+      document.getElementById("f-p-cursos").innerHTML = htmlSelectoresCursosAlumno(trim, leerCursosAlumnoModal());
     });
   }
 }
@@ -1570,21 +1587,22 @@ document.addEventListener("click", async function(e){
         } else {
           await sbUpdate("usuarios", {dni:existingDni}, {nombre:nombres, apellido:apellidos, celular:celular});
         }
-        // Alumno: actualizar el curso inscrito en el trimestre elegido
-        var selCursoAlu = document.getElementById("f-p-curso");
-        if(selCursoAlu){
+        // Alumno: actualizar los cursos inscritos (hasta 3) en el trimestre elegido
+        if(document.getElementById("f-p-cursos")){
           var trimAlu = document.getElementById("f-p-trimestre").value;
-          var nuevoCurso = selCursoAlu.value;
+          var elegidos = leerCursosAlumnoModal().filter(Boolean);
           var actualesTrim = db.inscripciones.filter(function(i){
             if(i.dni !== dniFinal) return false;
             var cc = findCurso(i.cursoId);
             return cc && cc.trimestreId === trimAlu;
-          });
+          }).map(function(i){ return i.cursoId; });
+          // retirar los que se quitaron (los que se mantienen conservan sus notas)
           for(var ii=0; ii<actualesTrim.length; ii++){
-            if(actualesTrim[ii].cursoId !== nuevoCurso) await sbDelete("inscripciones", {dni:dniFinal, curso_id:actualesTrim[ii].cursoId});
+            if(elegidos.indexOf(actualesTrim[ii]) === -1) await sbDelete("inscripciones", {dni:dniFinal, curso_id:actualesTrim[ii]});
           }
-          var yaEnNuevo = actualesTrim.some(function(i){ return i.cursoId === nuevoCurso; });
-          if(nuevoCurso && !yaEnNuevo) await sbInsert("inscripciones", {dni:dniFinal, curso_id:nuevoCurso});
+          for(var jj=0; jj<elegidos.length; jj++){
+            if(actualesTrim.indexOf(elegidos[jj]) === -1) await sbInsert("inscripciones", {dni:dniFinal, curso_id:elegidos[jj]});
+          }
         }
         await fetchAll();
         closeModal(); toast("Guardado correctamente."); renderAdminTab();
