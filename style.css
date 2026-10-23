@@ -303,3 +303,17 @@ textarea.bulk{
   .card{padding:16px}
   .pill-btn{padding:9px 13px;font-size:.82rem}
 }
+
+/* ---------- DASHBOARD ---------- */
+.dash-num{text-align:center;font-variant-numeric:tabular-nums}
+.dash-pct{color:var(--ink-soft);font-size:.74rem;font-weight:600}
+.rank{display:inline-flex;width:28px;height:28px;border-radius:50%;background:var(--field-bg);align-items:center;justify-content:center;font-weight:800;color:var(--purple-2);font-size:.85rem}
+.rank.top{background:var(--gold);color:#4a3600}
+.dash-rank th{text-align:center}
+.dash-rank th:nth-child(2){text-align:left}
+.dash-detail{border:1px solid var(--line);border-radius:12px;margin-bottom:10px;padding:0 14px;background:#fff}
+.dash-detail summary{cursor:pointer;padding:12px 0;list-style-position:inside}
+.dash-detail[open] summary{border-bottom:1px solid var(--line);margin-bottom:12px}
+.dash-detail .table-wrap{margin-bottom:14px}
+.dash-sel td{background:#f3edff}
+.dash-total td{background:var(--field-bg)}

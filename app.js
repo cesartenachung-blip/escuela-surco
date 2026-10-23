@@ -851,7 +851,9 @@ function renderAlumnoContent(user){
 // VISTA ADMINISTRADOR
 // ---------------------------------------------------------------------
 var adminViewState = {
-  tab:"cursos",
+  tab:"dashboard",
+  dashTrimestre:"",
+  dashSemana:null,
   filtroCursosTrimestre:"",
   filtroAlumnosTrimestre:"",
   filtroAlumnosCurso:"",
@@ -866,6 +868,7 @@ function countLabel(n, singular, plural){ return n + " " + (n===1?singular:plura
 
 function renderAdminView(user){
   var tabs = [
+    ["dashboard","Dashboard"],
     ["cursos","Cursos"],
     ["alumnos","Alumnos"],
     ["monitores","Monitores"],
@@ -883,6 +886,7 @@ function renderAdminView(user){
 function renderAdminTab(){
   var host = document.getElementById("admin-content");
   switch(adminViewState.tab){
+    case "dashboard": return renderAdminDashboard(host);
     case "cursos": return renderAdminCursos(host);
     case "alumnos": return renderAdminPersonas(host, "estudiante");
     case "monitores": return renderAdminPersonas(host, "monitor");
@@ -1187,6 +1191,125 @@ function renderAdminIntercesionTable(){
     (filas.length ?
       '<div class="table-wrap"><table><thead><tr><th>Alumno</th>'+(mostrarColumnaCurso?'<th>Curso</th>':'')+'<th>Intercesión</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'
       : '<div class="empty"><p>No se encontraron alumnos inscritos'+(q?" con ese criterio":"")+'.</p></div>');
+}
+
+// ---------------------------------------------------------------------
+// DASHBOARD: avance semanal de cada curso (ordenado de mayor a menor)
+// ---------------------------------------------------------------------
+function datosSemanaCurso(curso, semana){
+  var ins = inscritosDeCurso(curso.id);
+  var semanas = [];
+  if(semana === "all"){ for(var w=1; w<=TOTAL_SEMANAS; w++) semanas.push(w); } else semanas.push(semana);
+  var d = {inscritos:ins.length, asis:0, devo:0, vers:0, inter:0};
+  ins.forEach(function(a){
+    semanas.forEach(function(w){
+      var r = getAsistencia(a.dni, curso.id, w);
+      if(!r) return;
+      if(r.asistio) d.asis++;
+      if(r.devocional) d.devo++;
+      if(r.versiculo) d.vers++;
+      if(r.intercesion) d.inter++;
+    });
+  });
+  d.total = d.asis + d.devo + d.vers + d.inter;
+  d.max = ins.length * 4 * semanas.length;
+  d.pct = d.max ? Math.round(d.total / d.max * 100) : 0;
+  return d;
+}
+function celdaConteo(n, base){
+  var pct = base ? Math.round(n / base * 100) : 0;
+  return '<td class="dash-num"><strong>'+n+'</strong> <span class="dash-pct">'+pct+'%</span></td>';
+}
+
+function renderAdminDashboard(host){
+  var trimestres = db.trimestres;
+  if(!adminViewState.dashTrimestre && trimestres.length) adminViewState.dashTrimestre = trimestres[0].id;
+  var cursos = cursosDeTrimestre(adminViewState.dashTrimestre);
+
+  // Semana por defecto: la última con registros en este trimestre
+  if(adminViewState.dashSemana === null){
+    var ultima = 1;
+    for(var w=1; w<=TOTAL_SEMANAS; w++){
+      var hay = db.asistencia.some(function(a){
+        return a.semana === w && (a.asistio||a.devocional||a.versiculo||a.intercesion) && cursos.some(function(c){ return c.id === a.cursoId; });
+      });
+      if(hay) ultima = w;
+    }
+    adminViewState.dashSemana = ultima;
+  }
+  var sem = adminViewState.dashSemana;
+  var esAcum = sem === "all";
+
+  var filas = cursos.map(function(c){ return {curso:c, d:datosSemanaCurso(c, sem)}; }).sort(function(x,y){
+    return (y.d.total - x.d.total) || (y.d.asis - x.d.asis) || x.curso.nombre.localeCompare(y.curso.nombre, "es", {sensitivity:"base"});
+  });
+
+  var tot = {inscritos:0, asis:0, devo:0, vers:0, inter:0};
+  filas.forEach(function(f){ tot.inscritos += f.d.inscritos; tot.asis += f.d.asis; tot.devo += f.d.devo; tot.vers += f.d.vers; tot.inter += f.d.inter; });
+
+  var opTrim = trimestres.map(function(t){
+    return '<option value="'+t.id+'" '+(t.id===adminViewState.dashTrimestre?"selected":"")+'>'+escapeHtml(t.nombre)+'</option>';
+  }).join("");
+  var opSem = "";
+  for(var i=1; i<=TOTAL_SEMANAS; i++) opSem += '<option value="'+i+'" '+(sem===i?"selected":"")+'>Semana '+i+'</option>';
+  opSem += '<option value="all" '+(esAcum?"selected":"")+'>Acumulado (semanas 1-'+TOTAL_SEMANAS+')</option>';
+
+  var etiqueta = esAcum ? "acumulado" : "semana "+sem;
+  var filasHtml = filas.map(function(f, idx){
+    var d = f.d, base = esAcum ? d.inscritos*TOTAL_SEMANAS : d.inscritos;
+    return '<tr>' +
+      '<td><span class="rank'+(idx<3?" top":"")+'">'+(idx+1)+'</span></td>' +
+      '<td><strong>'+escapeHtml(f.curso.nombre)+'</strong></td>' +
+      '<td class="dash-num">'+d.inscritos+'</td>' +
+      celdaConteo(d.asis, base) + celdaConteo(d.devo, base) + celdaConteo(d.vers, base) + celdaConteo(d.inter, base) +
+      '<td class="dash-num"><strong>'+d.total+'</strong></td>' +
+      '<td style="min-width:110px"><div class="progress-bar"><div style="width:'+d.pct+'%"></div></div><span class="dash-pct">'+d.pct+'%</span></td>' +
+    '</tr>';
+  }).join("");
+
+  // Detalle semana a semana de cada curso (mismo orden)
+  var detalle = filas.map(function(f){
+    var rowsSem = "", acum = {asis:0, devo:0, vers:0, inter:0};
+    for(var w=1; w<=TOTAL_SEMANAS; w++){
+      var dw = datosSemanaCurso(f.curso, w);
+      acum.asis += dw.asis; acum.devo += dw.devo; acum.vers += dw.vers; acum.inter += dw.inter;
+      rowsSem += '<tr'+(!esAcum && w===sem?' class="dash-sel"':'')+'><td><strong>Semana '+w+'</strong></td><td class="dash-num">'+dw.asis+'</td><td class="dash-num">'+dw.devo+'</td><td class="dash-num">'+dw.vers+'</td><td class="dash-num">'+dw.inter+'</td></tr>';
+    }
+    rowsSem += '<tr class="dash-total"><td><strong>Total</strong></td><td class="dash-num">'+acum.asis+'</td><td class="dash-num">'+acum.devo+'</td><td class="dash-num">'+acum.vers+'</td><td class="dash-num">'+acum.inter+'</td></tr>';
+    return '<details class="dash-detail"><summary><strong>'+escapeHtml(f.curso.nombre)+'</strong> <span class="dash-pct">'+f.d.inscritos+' inscritos</span></summary>' +
+      '<div class="table-wrap"><table><thead><tr><th>Semana</th><th>Asistieron</th><th>Devocionales</th><th>Versículos</th><th>Intercesiones</th></tr></thead><tbody>'+rowsSem+'</tbody></table></div></details>';
+  }).join("");
+
+  host.innerHTML =
+    '<div class="card">' +
+      '<h2 style="margin:0 0 14px">Dashboard <span class="badge-muted">'+countLabel(filas.length,"curso","cursos")+'</span></h2>' +
+      '<div class="toolbar" style="margin-bottom:14px">' +
+        '<div class="field"><label>Trimestre</label><select id="dash-trimestre">'+opTrim+'</select></div>' +
+        '<div class="field"><label>Semana</label><select id="dash-semana">'+opSem+'</select></div>' +
+      '</div>' +
+      '<div class="stat-row compact">' +
+        '<div class="stat"><div class="num">'+tot.inscritos+'</div><div class="lbl">Inscritos</div></div>' +
+        '<div class="stat"><div class="num">'+tot.asis+'</div><div class="lbl">Asistieron ('+etiqueta+')</div></div>' +
+        '<div class="stat"><div class="num">'+tot.devo+'</div><div class="lbl">Devocionales</div></div>' +
+        '<div class="stat"><div class="num">'+tot.vers+'</div><div class="lbl">Versículos</div></div>' +
+        '<div class="stat"><div class="num">'+tot.inter+'</div><div class="lbl">Intercesiones</div></div>' +
+      '</div>' +
+      (filas.length ?
+        '<p class="hint-text" style="margin:0 0 10px">Cursos ordenados de mayor a menor avance ('+etiqueta+'): asistencias + devocionales + versículos + intercesiones. El porcentaje es sobre los inscritos del curso.</p>' +
+        '<div class="table-wrap"><table class="dash-rank"><thead><tr><th>#</th><th>Curso</th><th>Inscritos</th><th>Asistieron</th><th>Devocionales</th><th>Versículos</th><th>Intercesiones</th><th>Total</th><th>Avance</th></tr></thead><tbody>'+filasHtml+'</tbody></table></div>'
+        : '<div class="empty"><p>No hay cursos en este trimestre.</p></div>') +
+    '</div>' +
+    (filas.length ? '<div class="card"><h3 style="margin-top:0">Avance semanal por curso</h3>'+detalle+'</div>' : '');
+
+  document.getElementById("dash-trimestre").addEventListener("change", function(e){
+    adminViewState.dashTrimestre = e.target.value;
+    adminViewState.dashSemana = null;
+    renderAdminTab();
+  });
+  document.getElementById("dash-semana").addEventListener("change", function(e){
+    adminViewState.dashSemana = e.target.value === "all" ? "all" : parseInt(e.target.value, 10);
+    renderAdminTab();
+  });
 }
 
 function renderAdminMasivo(host){
