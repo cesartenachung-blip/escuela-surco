@@ -335,3 +335,4 @@ textarea.bulk{
 .dash-asis thead th:first-child{background:var(--field-bg)}
 .dash-asis .dash-total td:first-child{background:var(--field-bg)}
 .dash-asis th{white-space:nowrap}
+.dash-equipo{font-size:.82rem;min-width:120px;color:var(--ink)}

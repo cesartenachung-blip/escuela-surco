@@ -1221,6 +1221,18 @@ function celdaConteo(n, base){
   return '<td class="dash-num"><strong>'+n+'</strong> <span class="dash-pct">'+pct+'%</span></td>';
 }
 
+// Los cursos virtuales no se incluyen en gráficos ni reportes del Dashboard
+function esCursoVirtual(c){ return normalize(c.nombre).indexOf("virtual") > -1; }
+function titulo(t){ t = String(t||"").trim().toLowerCase(); return t.charAt(0).toUpperCase() + t.slice(1); }
+// "Carmen Rosa" + "Chavez Cervantes" -> "Carmen Chavez"
+function nombreCorto(dni){
+  var u = findUsuario(dni);
+  if(!u) return "";
+  var n = String(u.nombre||"").trim().split(/\s+/)[0], a = String(u.apellido||"").trim().split(/\s+/)[0];
+  return (titulo(n) + " " + titulo(a)).trim();
+}
+function nombresCortos(dnis){ return dnis.map(nombreCorto).filter(Boolean).join(", "); }
+
 function fmtPct(n){ return (Math.round(n*10)/10) + "%"; }
 
 // Asistencia por curso: alumnos, asistentes por clase (1-9), promedio y "nunca asistió".
@@ -1245,7 +1257,7 @@ function datosAsistenciaCurso(curso){
 function renderAdminDashboard(host){
   var trimestres = db.trimestres;
   if(!adminViewState.dashTrimestre && trimestres.length) adminViewState.dashTrimestre = trimestres[0].id;
-  var cursos = cursosDeTrimestre(adminViewState.dashTrimestre);
+  var cursos = cursosDeTrimestre(adminViewState.dashTrimestre).filter(function(c){ return !esCursoVirtual(c); });
 
   // Semana por defecto: la última con registros en este trimestre
   if(adminViewState.dashSemana === null){
@@ -1321,11 +1333,15 @@ function renderAdminDashboard(host){
 
   var filasAsis = asis.map(function(f){
     var celdas = f.porClase.map(function(n){ return '<td class="dash-num">'+(n>0?n:'<span class="dash-pct">&ndash;</span>')+'</td>'; }).join("");
-    return '<tr><td><strong>'+escapeHtml(f.curso.nombre)+'</strong></td><td class="dash-num">'+f.alumnos+'</td>' + celdas +
+    var maes = nombresCortos(maestrosDeCurso(f.curso)), mons = nombresCortos(soloMonitoresDeCurso(f.curso));
+    return '<tr><td><strong>'+escapeHtml(f.curso.nombre)+'</strong></td>' +
+      '<td class="dash-equipo">'+(escapeHtml(maes)||'<span class="dash-pct">&ndash;</span>')+'</td>' +
+      '<td class="dash-equipo">'+(escapeHtml(mons)||'<span class="dash-pct">&ndash;</span>')+'</td>' +
+      '<td class="dash-num">'+f.alumnos+'</td>' + celdas +
       '<td class="dash-num"><strong>'+fmtPct(f.promedio)+'</strong></td>' +
       '<td class="dash-num">'+(f.nunca>0?'<span class="badge-warn">'+f.nunca+'</span>':'0')+'</td></tr>';
   }).join("");
-  var filaTotal = '<tr class="dash-total"><td><strong>Total</strong></td><td class="dash-num"><strong>'+gAlumnos+'</strong></td>' +
+  var filaTotal = '<tr class="dash-total"><td><strong>Total</strong></td><td></td><td></td><td class="dash-num"><strong>'+gAlumnos+'</strong></td>' +
     gClase.map(function(n){ return '<td class="dash-num"><strong>'+(n>0?n:'&ndash;')+'</strong></td>'; }).join("") +
     '<td class="dash-num"><strong>'+fmtPct(gProm)+'</strong></td><td class="dash-num"><strong>'+gNunca+'</strong></td></tr>';
   var cabClases = ""; for(var k=1; k<=TOTAL_SEMANAS; k++) cabClases += '<th>Clase '+k+'</th>';
@@ -1344,7 +1360,7 @@ function renderAdminDashboard(host){
       '</div>' +
       '<div class="card">' +
         '<h3 style="margin-top:0">Asistencia Cursos Presenciales</h3>' +
-        '<div class="table-wrap"><table class="dash-rank dash-asis"><thead><tr><th>Curso</th><th>Alumnos</th>'+cabClases+'<th>Promedio</th><th>Nunca asistió</th></tr></thead><tbody>'+filasAsis+filaTotal+'</tbody></table></div>' +
+        '<div class="table-wrap"><table class="dash-rank dash-asis"><thead><tr><th>Curso</th><th>Maestros</th><th>Monitores</th><th>Alumnos</th>'+cabClases+'<th>Promedio</th><th>Nunca asistió</th></tr></thead><tbody>'+filasAsis+filaTotal+'</tbody></table></div>' +
         '<p class="hint-text" style="margin:10px 0 0"><b>Alumnos</b>: inscritos del curso. <b>Clase 1-9</b>: alumnos que asistieron en esa clase. <b>Promedio</b>: suma de asistencias ÷ (alumnos × clases con asistencia registrada), por ejemplo 100 inscritos con 80 y 60 asistentes en las clases 1 y 2 = (80+60) ÷ (100×2) = 70%. <b>Nunca asistió</b>: alumnos sin ninguna asistencia hasta hoy.</p>' +
       '</div>'
       : '') +
@@ -1360,10 +1376,7 @@ function renderAdminDashboard(host){
         '<div class="stat"><div class="num">'+tot.vers+'</div><div class="lbl">Versículos</div></div>' +
         '<div class="stat"><div class="num">'+tot.inter+'</div><div class="lbl">Intercesiones</div></div>' +
       '</div>' +
-      (filas.length ?
-        '<p class="hint-text" style="margin:0 0 10px">Cursos ordenados de mayor a menor avance ('+etiqueta+'): asistencias + devocionales + versículos + intercesiones. El porcentaje es sobre los inscritos del curso.</p>' +
-        '<div class="table-wrap"><table class="dash-rank"><thead><tr><th>#</th><th>Curso</th><th>Inscritos</th><th>Asistieron</th><th>Devocionales</th><th>Versículos</th><th>Intercesiones</th><th>Total</th><th>Avance</th></tr></thead><tbody>'+filasHtml+'</tbody></table></div>'
-        : '<div class="empty"><p>No hay cursos en este trimestre.</p></div>') +
+      (filas.length ? '' : '<div class="empty"><p>No hay cursos en este trimestre.</p></div>') +
     '</div>' +
     (filas.length ? '<div class="card"><h3 style="margin-top:0">Avance semanal por curso</h3>'+detalle+'</div>' : '');
 
