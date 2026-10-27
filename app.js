@@ -1221,6 +1221,27 @@ function celdaConteo(n, base){
   return '<td class="dash-num"><strong>'+n+'</strong> <span class="dash-pct">'+pct+'%</span></td>';
 }
 
+function fmtPct(n){ return (Math.round(n*10)/10) + "%"; }
+
+// Asistencia por curso: alumnos, asistentes por clase (1-9), promedio y "nunca asistió".
+// Promedio = suma de asistencias de las clases dictadas / (alumnos x clases dictadas).
+// Una clase se considera dictada si el curso tiene al menos 1 asistencia registrada en esa semana.
+function datosAsistenciaCurso(curso){
+  var ins = inscritosDeCurso(curso.id);
+  var porClase = [], clasesVan = 0, suma = 0;
+  for(var w=1; w<=TOTAL_SEMANAS; w++){
+    var n = ins.filter(function(a){ var r = getAsistencia(a.dni, curso.id, w); return r && r.asistio; }).length;
+    porClase.push(n);
+    if(n > 0){ clasesVan++; suma += n; }
+  }
+  var nunca = ins.filter(function(a){
+    for(var w=1; w<=TOTAL_SEMANAS; w++){ var r = getAsistencia(a.dni, curso.id, w); if(r && r.asistio) return false; }
+    return true;
+  }).length;
+  var promedio = (ins.length && clasesVan) ? suma / (ins.length * clasesVan) * 100 : 0;
+  return {curso:curso, alumnos:ins.length, porClase:porClase, clasesVan:clasesVan, suma:suma, promedio:promedio, nunca:nunca};
+}
+
 function renderAdminDashboard(host){
   var trimestres = db.trimestres;
   if(!adminViewState.dashTrimestre && trimestres.length) adminViewState.dashTrimestre = trimestres[0].id;
@@ -1280,9 +1301,54 @@ function renderAdminDashboard(host){
       '<div class="table-wrap"><table><thead><tr><th>Semana</th><th>Asistieron</th><th>Devocionales</th><th>Versículos</th><th>Intercesiones</th></tr></thead><tbody>'+rowsSem+'</tbody></table></div></details>';
   }).join("");
 
+  // ---- Asistencia de cursos presenciales (gráfico + tabla), ordenados de mayor a menor promedio ----
+  var asis = cursos.map(datosAsistenciaCurso).sort(function(x,y){
+    return (y.promedio - x.promedio) || (y.alumnos - x.alumnos) || x.curso.nombre.localeCompare(y.curso.nombre, "es", {sensitivity:"base"});
+  });
+  var gSuma = 0, gBase = 0, gAlumnos = 0, gNunca = 0, gClase = [0,0,0,0,0,0,0,0,0];
+  asis.forEach(function(f){
+    gSuma += f.suma; gBase += f.alumnos * f.clasesVan; gAlumnos += f.alumnos; gNunca += f.nunca;
+    f.porClase.forEach(function(n, i){ gClase[i] += n; });
+  });
+  var gProm = gBase ? gSuma / gBase * 100 : 0;
+  var trimNombre = findTrimestre(adminViewState.dashTrimestre);
+
+  var barras = asis.map(function(f){
+    return '<div class="bar-row"><div class="bar-label" title="'+escapeHtml(f.curso.nombre)+'">'+escapeHtml(f.curso.nombre)+'</div>' +
+      '<div class="bar-track"><div class="bar-fill" style="width:'+Math.min(100, f.promedio)+'%"></div></div>' +
+      '<div class="bar-val">'+fmtPct(f.promedio)+'</div></div>';
+  }).join("");
+
+  var filasAsis = asis.map(function(f){
+    var celdas = f.porClase.map(function(n){ return '<td class="dash-num">'+(n>0?n:'<span class="dash-pct">&ndash;</span>')+'</td>'; }).join("");
+    return '<tr><td><strong>'+escapeHtml(f.curso.nombre)+'</strong></td><td class="dash-num">'+f.alumnos+'</td>' + celdas +
+      '<td class="dash-num"><strong>'+fmtPct(f.promedio)+'</strong></td>' +
+      '<td class="dash-num">'+(f.nunca>0?'<span class="badge-warn">'+f.nunca+'</span>':'0')+'</td></tr>';
+  }).join("");
+  var filaTotal = '<tr class="dash-total"><td><strong>Total</strong></td><td class="dash-num"><strong>'+gAlumnos+'</strong></td>' +
+    gClase.map(function(n){ return '<td class="dash-num"><strong>'+(n>0?n:'&ndash;')+'</strong></td>'; }).join("") +
+    '<td class="dash-num"><strong>'+fmtPct(gProm)+'</strong></td><td class="dash-num"><strong>'+gNunca+'</strong></td></tr>';
+  var cabClases = ""; for(var k=1; k<=TOTAL_SEMANAS; k++) cabClases += '<th>Clase '+k+'</th>';
+
   host.innerHTML =
     '<div class="card">' +
-      '<h2 style="margin:0 0 14px">Dashboard <span class="badge-muted">'+countLabel(filas.length,"curso","cursos")+'</span></h2>' +
+      '<h2 style="margin:0">Dashboard Monitoreo de los Cursos Presenciales <span class="badge-muted">'+countLabel(filas.length,"curso","cursos")+'</span></h2>' +
+      '<p class="hint-text" style="margin:6px 0 0">Trimestre: <strong>'+escapeHtml(trimNombre ? trimNombre.nombre : "—")+'</strong>. Para cambiar de trimestre o semana use los filtros más abajo.</p>' +
+    '</div>' +
+    (filas.length ?
+      '<div class="card">' +
+        '<h3 style="margin-top:0">Promedio de asistencia por curso (%) <span class="badge-muted">General: '+fmtPct(gProm)+'</span></h3>' +
+        '<div class="bar-chart">'+barras+
+          '<div class="bar-row bar-axis"><div></div><div class="bar-ticks"><span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div><div></div></div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="card">' +
+        '<h3 style="margin-top:0">Asistencia Cursos Presenciales</h3>' +
+        '<div class="table-wrap"><table class="dash-rank dash-asis"><thead><tr><th>Curso</th><th>Alumnos</th>'+cabClases+'<th>Promedio</th><th>Nunca asistió</th></tr></thead><tbody>'+filasAsis+filaTotal+'</tbody></table></div>' +
+        '<p class="hint-text" style="margin:10px 0 0"><b>Alumnos</b>: inscritos del curso. <b>Clase 1-9</b>: alumnos que asistieron en esa clase. <b>Promedio</b>: suma de asistencias ÷ (alumnos × clases con asistencia registrada), por ejemplo 100 inscritos con 80 y 60 asistentes en las clases 1 y 2 = (80+60) ÷ (100×2) = 70%. <b>Nunca asistió</b>: alumnos sin ninguna asistencia hasta hoy.</p>' +
+      '</div>'
+      : '') +
+    '<div class="card">' +
       '<div class="toolbar" style="margin-bottom:14px">' +
         '<div class="field"><label>Trimestre</label><select id="dash-trimestre">'+opTrim+'</select></div>' +
         '<div class="field"><label>Semana</label><select id="dash-semana">'+opSem+'</select></div>' +
